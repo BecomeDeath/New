@@ -1,0 +1,79 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            configure: ""
+          - name: macOS
+            os: macos-latest
+            configure: -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          - name: Linux
+            os: ubuntu-24.04
+            configure: -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxext-dev libxcomposite-dev libxi-dev libfreetype-dev libfontconfig1-dev libcurl4-openssl-dev libgl1-mesa-dev
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          ART=build/PromptMIDI_artefacts/Release
+          mkdir -p dist
+          cp -R "$ART/VST3/PromptMIDI.vst3" dist/
+          [ -d "$ART/AU/PromptMIDI.component" ] && cp -R "$ART/AU/PromptMIDI.component" dist/
+          [ -d "$ART/Standalone/PromptMIDI.app" ] && cp -R "$ART/Standalone/PromptMIDI.app" dist/
+          [ -f "$ART/Standalone/PromptMIDI.exe" ] && cp "$ART/Standalone/PromptMIDI.exe" dist/
+          [ -f "$ART/Standalone/PromptMIDI" ] && cp "$ART/Standalone/PromptMIDI" dist/
+          cp README.md dist/
+
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            # Ad-hoc signature so Apple Silicon Macs will load the bundles.
+            for b in dist/*.vst3 dist/*.component dist/*.app; do codesign --force --deep --sign - "$b"; done
+          fi
+
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            (cd dist && 7z a -tzip ../PromptMIDI-${{ matrix.name }}.zip . > /dev/null)
+          else
+            tar -czf PromptMIDI-${{ matrix.name }}.tar.gz -C dist .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PromptMIDI-${{ matrix.name }}
+          path: |
+            PromptMIDI-${{ matrix.name }}.zip
+            PromptMIDI-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
