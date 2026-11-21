@@ -17,12 +17,76 @@
 
 static void usage()
 {
-    std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--list-styles]\n";
+    std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json] [--list-styles]\n";
+}
+
+static std::string jsonEscape (const std::string& s)
+{
+    std::string out;
+
+    for (unsigned char c : s)
+    {
+        if (c == '"' || c == '\\')  { out += '\\'; out += (char) c; }
+        else if (c < 0x20)          { char buf[8]; std::snprintf (buf, sizeof (buf), "\\u%04x", c); out += buf; }
+        else                        out += (char) c;
+    }
+
+    return out;
+}
+
+/** Dumps the composition (and how the prompt was read) for analysis tools. */
+static void writeJson (const std::string& path, const pm::StyleSpec& spec, const pm::Composition& c)
+{
+    std::ofstream f (path);
+    f << "{\"title\":\"" << jsonEscape (c.title) << "\",\"style\":\"" << spec.styleId << "\",\"tempo\":" << c.tempo
+      << ",\"tsNum\":" << c.tsNum << ",\"tsDen\":" << c.tsDen << ",\"bars\":" << c.bars << ",\"ticksPerBar\":" << c.ticksPerBar
+      << ",\"lengthTicks\":" << c.lengthTicks << ",\"keyRoot\":" << c.keyRoot << ",\"endKeyRoot\":" << c.endKeyRoot << ",\"mode\":\"" << pm::modeInfo (c.mode).id
+      << "\",\"summary\":\"" << jsonEscape (c.summary()) << "\",\"interpretation\":[";
+
+    for (size_t i = 0; i < spec.interpretation.size(); ++i)
+        f << (i ? "," : "") << "\"" << jsonEscape (spec.interpretation[i]) << "\"";
+
+    f << "],\"chords\":[";
+
+    for (size_t i = 0; i < c.chords.size(); ++i)
+    {
+        pm::Chord ch;
+        pm::parseChordSymbol (c.chords[i].name, 0, pm::Mode::Major, ch);
+        f << (i ? "," : "") << "{\"start\":" << c.chords[i].start << ",\"end\":" << c.chords[i].end << ",\"name\":\""
+          << jsonEscape (c.chords[i].name) << "\",\"roman\":\"" << jsonEscape (c.chords[i].roman) << "\",\"pcs\":[";
+
+        auto pcs = ch.pitchClasses();
+
+        for (size_t k = 0; k < pcs.size(); ++k)
+            f << (k ? "," : "") << pcs[k];
+
+        f << "]}";
+    }
+
+    f << "],\"tracks\":[";
+
+    for (size_t t = 0; t < c.tracks.size(); ++t)
+    {
+        const auto& tr = c.tracks[t];
+        f << (t ? "," : "") << "{\"name\":\"" << jsonEscape (tr.name) << "\",\"role\":\"" << pm::roleId (tr.role) << "\",\"program\":"
+          << tr.program << ",\"channel\":" << tr.channel << ",\"drum\":" << (tr.isDrum ? "true" : "false")
+          << ",\"entryBar\":" << (t < spec.tracks.size() ? spec.tracks[t].entryBar : 0) << ",\"cc\":" << tr.controls.size() << ",\"notes\":[";
+
+        for (size_t n = 0; n < tr.notes.size(); ++n)
+        {
+            const auto& no = tr.notes[n];
+            f << (n ? "," : "") << "[" << no.start << "," << no.length << "," << no.pitch << "," << no.velocity << "]";
+        }
+
+        f << "]}";
+    }
+
+    f << "]}\n";
 }
 
 int main (int argc, char** argv)
 {
-    std::string prompt, outFile;
+    std::string prompt, outFile, jsonFile;
     uint64_t seed = 1;
     bool printNotes = false;
 
@@ -33,6 +97,7 @@ int main (int argc, char** argv)
         if ((a == "-o" || a == "--output") && i + 1 < argc)   outFile = argv[++i];
         else if (a == "--seed" && i + 1 < argc)               seed = std::strtoull (argv[++i], nullptr, 10);
         else if (a == "--notes")                              printNotes = true;
+        else if (a == "--json" && i + 1 < argc)               jsonFile = argv[++i];
         else if (a == "--list-styles")
         {
             for (auto& s : pm::builtInStyles())
@@ -81,6 +146,9 @@ int main (int argc, char** argv)
 
         outFile += ".mid";
     }
+
+    if (! jsonFile.empty())
+        writeJson (jsonFile, spec, comp);
 
     const auto bytes = pm::writeMidiFile (comp);
     std::ofstream f (outFile, std::ios::binary);

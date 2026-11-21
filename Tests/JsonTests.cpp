@@ -107,6 +107,7 @@ int main()
         CHECK (back.tracks.size() == spec.tracks.size());
         CHECK (back.keyRoot == spec.keyRoot && back.mode == spec.mode && back.tempo == spec.tempo && back.bars == spec.bars);
         CHECK (back.tsNum == spec.tsNum && back.tsDen == spec.tsDen && back.progression == spec.progression);
+        CHECK (back.progressionB == spec.progressionB && back.finalLift == spec.finalLift);
         CHECK (pm::writeMidiFile (pm::compose (back, 5)) == pm::writeMidiFile (pm::compose (spec, 5)));
     }
 
@@ -145,7 +146,8 @@ int main()
     {
         const juce::String plan = R"({
             "title": "Moonlit Harbour", "key": "D", "mode": "dorian", "tempo": 88, "timeSignature": "6/8", "bars": 16,
-            "progression": ["i", "IV", "VII", "i"], "chordsPerBar": 1, "swing": 0, "swingSixteenths": false,
+            "progression": ["i", "IV", "VII", "i"], "progressionB": ["III", "VII", "IV", "IV"], "finalKeyChange": 2,
+            "chordsPerBar": 1, "swing": 0, "swingSixteenths": false,
             "energy": 0.4, "complexity": 0.3, "humanize": 0.6, "dynamics": "arc", "ending": "resolve",
             "theme": [ {"degree": 0, "beats": 1.5, "rest": false}, {"degree": 2, "beats": 1.5, "rest": false} ],
             "tracks": [
@@ -161,6 +163,7 @@ int main()
         CHECK (r.spec.keyRoot == 2 && r.spec.mode == pm::Mode::Dorian && r.spec.tsNum == 6 && r.spec.tsDen == 8);
         CHECK (r.spec.tracks.size() == 3 && r.spec.tracks[2].channel == 9 && r.spec.tracks[2].entryBar == 4);
         CHECK (r.spec.theme.size() == 2);
+        CHECK (r.spec.progressionB.size() == 4 && r.spec.finalLift == 2);
         CHECK (pm::compose (r.spec, 1).noteCount() > 0);
 
         juce::DynamicObject::Ptr refusal = new juce::DynamicObject();

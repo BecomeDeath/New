@@ -376,7 +376,7 @@ static void testComposer()
         CHECK (strong > 0 && chordTones * 10 >= strong * 7);
 
         if (spec.resolveEnding)
-            CHECK_EQ (wrapPc (t.notes.back().pitch), spec.keyRoot);
+            CHECK_EQ (wrapPc (t.notes.back().pitch), a.endKeyRoot);
 
         break;
     }
@@ -389,6 +389,49 @@ static void testComposer()
     const auto single = writeMidiFile (a, 0);
     CHECK_EQ (noteOnCountInMidi (single, tracks), (int) a.tracks[0].notes.size());
     CHECK_EQ (tracks, 2);
+}
+
+/** Every chord-playing part must play the notes of the chord it is on (no major chords on minor harmony). */
+static void testPartsFollowTheHarmony()
+{
+    std::printf ("parts follow the harmony\n");
+
+    for (auto& st : builtInStyles())
+    {
+        for (uint64_t seed = 1; seed <= 3; ++seed)
+        {
+            const auto spec = interpretPrompt (st.displayName + " orchestral", seed);
+            const auto comp = compose (spec, seed);
+
+            for (auto& t : comp.tracks)
+            {
+                if (t.role != Role::Chords && t.role != Role::Pad)
+                    continue;
+
+                int wrong = 0, total = 0;
+
+                for (auto& n : t.notes)
+                {
+                    for (auto& slot : comp.chords)
+                    {
+                        if (n.start + 40 >= slot.start && n.start + 40 < slot.end)
+                        {
+                            Chord ch;
+                            parseChordSymbol (slot.name, 0, Mode::Major, ch);
+                            ++total;
+                            wrong += ch.containsPc (n.pitch) ? 0 : 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (wrong > 0)
+                    std::printf ("  %s / %s: %d of %d chord notes outside the chord\n", st.displayName.c_str(), t.name.c_str(), wrong, total);
+
+                CHECK (wrong == 0);
+            }
+        }
+    }
 }
 
 static void testEveryStyleAndMeter()
@@ -459,6 +502,7 @@ int main()
     testPromptInterpretation();
     testComposer();
     testEveryStyleAndMeter();
+    testPartsFollowTheHarmony();
     testThemeAndHandWrittenSpec();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);

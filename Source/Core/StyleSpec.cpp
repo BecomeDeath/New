@@ -117,7 +117,7 @@ bool dynamicsFromString (const std::string& text, Dynamics& out)
 const std::vector<std::string>& patternsForRole (Role r)
 {
     static const std::vector<std::string> melody     { "auto", "lyrical", "rhythmic", "sparse" };
-    static const std::vector<std::string> counter    { "auto", "sustained", "flowing" };
+    static const std::vector<std::string> counter    { "auto", "sustained", "flowing", "double" };
     static const std::vector<std::string> chords     { "auto", "block", "sustain", "pulse", "broken", "alberti", "strum",
                                                        "stabs", "offbeat", "comp", "waltz", "power", "bossa" };
     static const std::vector<std::string> pad        { "auto", "sustain", "swell" };
@@ -189,6 +189,38 @@ const char* gmProgramName (int program)
     return names[clampValue (program, 0, 127)];
 }
 
+void instrumentRange (int p, int& lo, int& hi)
+{
+    struct R { int from, to, lo, hi; };
+    static const R table[] = {
+        {   0,   7, 21, 108 }, {   8,   8, 60, 108 }, {   9,   9, 79, 108 }, {  10,  10, 60, 96 }, {  11,  11, 53, 89 },
+        {  12,  12, 45,  96 }, {  13,  13, 65, 108 }, {  14,  14, 60,  77 }, {  15,  15, 48, 84 }, {  16,  20, 24, 96 },
+        {  21,  21, 41,  89 }, {  22,  22, 60,  96 }, {  23,  23, 41,  89 }, {  24,  31, 40, 86 }, {  32,  32, 28, 55 },
+        {  33,  37, 28,  60 }, {  38,  39, 24,  60 }, {  40,  40, 55, 100 }, {  41,  41, 48, 88 }, {  42,  42, 36, 76 },
+        {  43,  43, 28,  55 }, {  44,  45, 28,  96 }, {  46,  46, 24, 103 }, {  47,  47, 38, 57 }, {  48,  51, 28, 100 },
+        {  52,  53, 40,  81 }, {  54,  54, 40,  84 }, {  55,  55, 36,  84 }, {  56,  56, 52, 82 }, {  57,  57, 40, 72 },
+        {  58,  58, 26,  58 }, {  59,  59, 52,  82 }, {  60,  60, 34,  77 }, {  61,  61, 34, 82 }, {  62,  63, 24, 96 },
+        {  64,  64, 56,  88 }, {  65,  65, 49,  81 }, {  66,  66, 44,  76 }, {  67,  67, 36, 69 }, {  68,  68, 58, 91 },
+        {  69,  69, 52,  81 }, {  70,  70, 34,  72 }, {  71,  71, 50,  91 }, {  72,  72, 74, 108 }, {  73,  79, 60, 96 },
+        {  80,  87, 36, 108 }, {  88, 103, 24, 108 }, { 104, 104, 48,  84 }, { 105, 105, 48, 84 }, { 106, 106, 50, 86 },
+        { 107, 107, 48,  91 }, { 108, 108, 60,  96 }, { 109, 109, 55,  81 }, { 110, 110, 55, 100 }, { 111, 111, 58, 89 },
+        { 112, 112, 72, 108 }, { 113, 113, 60,  80 }, { 114, 114, 52,  88 }, { 116, 116, 36, 60 },
+    };
+
+    lo = 0;
+    hi = 127;
+
+    for (auto& r : table)
+    {
+        if (p >= r.from && p <= r.to)
+        {
+            lo = r.lo;
+            hi = r.hi;
+            return;
+        }
+    }
+}
+
 void normalizeSpec (StyleSpec& s)
 {
     if (s.title.empty())
@@ -214,6 +246,15 @@ void normalizeSpec (StyleSpec& s)
 
     if (s.progression.size() > 32)
         s.progression.resize (32);
+
+    s.progressionB.erase (std::remove_if (s.progressionB.begin(), s.progressionB.end(),
+                                          [] (const std::string& c) { return c.find_first_not_of (" \t") == std::string::npos; }),
+                          s.progressionB.end());
+
+    if (s.progressionB.size() > 32)
+        s.progressionB.resize (32);
+
+    s.finalLift = clampValue (s.finalLift, 0, 5);
 
     if (s.progression.empty())
     {
@@ -288,12 +329,19 @@ void normalizeSpec (StyleSpec& s)
 
         if (t.role != Role::Percussion)
         {
-            // Every pitched role needs at least an octave and a half to move around in.
-            while (t.highNote - t.lowNote < 18)
+            // Keep parts inside what the instrument can actually play...
+            int instLo = 0, instHi = 127;
+            instrumentRange (t.program, instLo, instHi);
+            t.lowNote = clampValue (t.lowNote, instLo, instHi);
+            t.highNote = clampValue (t.highNote, instLo, instHi);
+
+            // ...while giving every pitched role about an octave and a half to move around in.
+            const int wanted = std::min (18, instHi - instLo);
+
+            while (t.highNote - t.lowNote < wanted)
             {
-                if (t.highNote < 127) ++t.highNote;
-                if (t.highNote - t.lowNote < 18 && t.lowNote > 0) --t.lowNote;
-                if (t.lowNote == 0 && t.highNote == 127) break;
+                if (t.highNote < instHi) ++t.highNote;
+                if (t.highNote - t.lowNote < wanted && t.lowNote > instLo) --t.lowNote;
             }
         }
 

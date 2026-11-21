@@ -46,6 +46,9 @@ const std::vector<std::string>& allPatternIds();
 /** General MIDI instrument name for a 0-based program number. */
 const char* gmProgramName (int program);
 
+/** Practical sounding range of a General MIDI instrument (MIDI notes). */
+void instrumentRange (int program, int& lowest, int& highest);
+
 /** One note of a hand-written theme: a scale step relative to the tonic, and a duration in quarter notes. */
 struct ThemeNote
 {
@@ -82,6 +85,8 @@ struct StyleSpec
     int keyRoot = 0;
     Mode mode = Mode::Major;
     std::vector<std::string> progression { "I", "V", "vi", "IV" };
+    std::vector<std::string> progressionB;  // contrasting harmony for B sections (empty = same as A)
+    int finalLift = 0;                       // semitones the last A section moves up (0 = no key change)
     double chordsPerBar = 1.0;
     double swing = 0.0;             // 0 = straight, 1 = full triplet swing
     bool swingSixteenths = false;   // swing 16ths (hip hop) rather than 8ths (jazz)

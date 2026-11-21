@@ -132,6 +132,8 @@ juce::var specToVar (const pm::StyleSpec& s)
     put (o, "timeSignature", juce::String (s.tsNum) + "/" + juce::String (s.tsDen));
     put (o, "bars", s.bars);
     put (o, "progression", stringArray (s.progression));
+    put (o, "progressionB", stringArray (s.progressionB));
+    put (o, "finalKeyChange", s.finalLift);
     put (o, "chordsPerBar", s.chordsPerBar);
     put (o, "swing", s.swing);
     put (o, "swingSixteenths", s.swingSixteenths);
@@ -229,6 +231,11 @@ bool specFromVar (const juce::var& o, pm::StyleSpec& s, juce::String& error)
             s.progression.push_back (toStd (c.toString()));
     }
 
+    if (auto* progB = o["progressionB"].getArray())
+        for (auto& c : *progB)
+            s.progressionB.push_back (toStd (c.toString()));
+
+    s.finalLift = getInt (o, "finalKeyChange", 0);
     s.chordsPerBar = getDouble (o, "chordsPerBar", s.chordsPerBar);
     s.swing = getDouble (o, "swing", s.swing);
     s.swingSixteenths = getBool (o, "swingSixteenths", s.swingSixteenths);
@@ -302,6 +309,7 @@ juce::var compositionToVar (const pm::Composition& c)
     put (o, "ticksPerBar", c.ticksPerBar);
     put (o, "lengthTicks", c.lengthTicks);
     put (o, "keyRoot", c.keyRoot);
+    put (o, "endKeyRoot", c.endKeyRoot);
     put (o, "mode", juce::String (pm::modeInfo (c.mode).id));
 
     juce::Array<juce::var> chords;
@@ -370,6 +378,7 @@ bool compositionFromVar (const juce::var& o, pm::Composition& c)
     c.ticksPerBar = juce::jmax (1, getInt (o, "ticksPerBar", 4 * pm::kPpq));
     c.lengthTicks = juce::jmax (0, getInt (o, "lengthTicks", 0));
     c.keyRoot = pm::wrapPc (getInt (o, "keyRoot", 0));
+    c.endKeyRoot = pm::wrapPc (getInt (o, "endKeyRoot", c.keyRoot));
 
     pm::Mode mode;
 
@@ -480,7 +489,9 @@ juce::var outputSchema()
         { "tempo",           typed ("integer", "Beats per minute (quarter notes), 40-220") },
         { "timeSignature",   enumOf ({ "4/4", "3/4", "2/4", "6/8", "12/8" }) },
         { "bars",            typed ("integer", "Length in bars, 4-64") },
-        { "progression",     withDescription (progression, "Roman numerals relative to the key and mode, cycled for the whole piece") },
+        { "progression",     withDescription (progression, "Roman numerals relative to the key and mode for the A sections") },
+        { "progressionB",    withDescription (progression, "Contrasting progression for the B section (bridge); [] to reuse the A progression") },
+        { "finalKeyChange",  typed ("integer", "Semitones the final statement of the theme lifts up (0 = no key change, 1-3 typical)") },
         { "chordsPerBar",    typed ("number", "Harmonic rhythm: 0.25, 0.5, 1, 2 or 4") },
         { "swing",           typed ("number", "0 = straight, 1 = full triplet swing") },
         { "swingSixteenths", typed ("boolean", "Swing 16th notes (hip hop) instead of 8ths (jazz)") },

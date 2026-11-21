@@ -19,3 +19,6 @@ Thumbs.db
 
 # Generated MIDI from the CLI
 *.mid
+
+# Python
+__pycache__/

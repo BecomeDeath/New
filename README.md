@@ -14,9 +14,14 @@
   - `just piano and cello, sad`
   - `celtic tavern jig` (6/8) · `viennese waltz` (3/4) · `30 second synthwave loop at 120 bpm`
 - **Two engines:**
-  - **Offline** (default): instant, free, no internet. A built-in interpreter recognises 30 styles, 20+ moods, 60+ instruments and explicit settings, then a composition engine writes the music.
+  - **Offline** (default): instant, free, no internet. A built-in interpreter recognises 40+ styles (including 12 orchestral game and film archetypes), 20+ moods, 60+ instruments and explicit settings, then a composition engine writes the music.
   - **Claude AI** (optional): Claude reads your prompt and writes the *composition plan* (key, mode, chord progression, instrumentation, registers, playing patterns, arrangement and a main theme). PromptMIDI's engine then writes the notes from that plan, so the MIDI is always valid and playable, even for unusual prompts such as *"music for a dwarven forge at night"*.
-- **Real arrangements, not random notes:** chord progressions written as roman numerals; voice-led chord voicings; melodies built from motifs that repeat and develop in phrases (A A' B A) and land on chord tones; counter-melodies that move against the lead; idiomatic patterns (walking bass, Alberti bass, guitar strums, harp arpeggios, string ostinatos, timpani rolls, house stabs, 808s); 20+ drum grooves with fills and crashes; staggered entries; dynamics curves; swing; humanisation; CC1/CC11 swells for orchestral pads.
+- **Real arrangements, not random notes:**
+  - **Form:** an intro, then 4-bar phrases in A A B A (A B A for three phrases). The B section has its own contrasting harmony, and heroic and epic cues can lift the final statement of the theme into a new key.
+  - **Melody:** themes open with a signature leap, repeat and develop their motif, land on chord tones on the beat, and peak around two-thirds of the way through. Counter-melodies move against the lead, and violins or glockenspiel can double the theme at the climax.
+  - **Harmony and orchestration:** voice-led chord voicings that stay out of the mud below C3, and every part kept inside its instrument's real range.
+  - **Patterns:** idiomatic writing such as walking bass, Alberti bass, guitar strums, harp arpeggios, string ostinatos and gallops, timpani rolls, pizzicato, house stabs and 808s, plus 20+ drum grooves with fills and crashes.
+  - **Expression:** staggered entries, dynamics curves, swing and humanisation. CC1 (dynamics) and CC11 (expression) curves are written on every bowed, blown and sung part, which orchestral sample libraries respond to. On a plain General MIDI synth, CC1 adds vibrato instead.
 - **Get the MIDI into your DAW:**
   - **Drag and drop** the whole piece, or a single track from the track list, straight onto your DAW's timeline.
   - **Export .mid**: a type-1 MIDI file with one named track per instrument, GM program changes, tempo, time and key signatures.
@@ -60,6 +65,8 @@ Use **Play** to preview without the host. Turn **Preview sound** off when you ro
 | You can say | Examples |
 |---|---|
 | Genre | fantasy, orchestral, epic, trailer, piano, classical, baroque, jazz, lofi, hip hop, trap, house, techno, trance, drum and bass, pop, rock, metal, ambient, synthwave, celtic, folk, horror, chiptune, bossa nova, funk, disco, blues, lullaby, japanese, arabian, march, waltz, r&b, soul, reggae, country, hymn |
+| Game and film cues | heroic main theme, boss battle, chase / action, stealth, lament / death scene, exploration / ruins, village / pastoral, space / sci-fi, whimsical / wizard school, villain / dark fantasy, victory fanfare, pirate / high seas |
+| Orchestrate any genre | add *orchestral* (or *orchestra*, *symphonic*, *cinematic*): `celtic orchestral`, `orchestral march`, `arabian desert orchestral theme`. The genre keeps its scale, meter and signature instruments; the band instruments become strings, harp and basses; and horns, timpani and percussion are added where they fit. |
 | Mood | soft, calm, energetic, epic, heroic, sad, emotional, happy, dark, mysterious, dreamy, romantic, tense, jazzy, groovy, simple, complex, slow, fast, building, fading |
 | Instruments | piano, rhodes, strings, violin, cello, harp, choir, flute, clarinet, oboe, trumpet, horns, brass, sax, guitar, nylon guitar, bass, 808, synth, pad, organ, music box, celesta, marimba, koto, sitar, bagpipes, steel drums, drums, taiko, and more |
 | Remove things | `no drums`, `without bass`, `no piano` |
@@ -116,6 +123,8 @@ The engine alone has no dependencies. `-DPROMPTMIDI_BUILD_PLUGIN=OFF` builds jus
 - `vst3_host_test`: loads the built `PromptMIDI.vst3` through JUCE's VST3 hosting, restores a project state, runs the transport and checks the MIDI notes, the preview audio and the saved state.
 
 `promptmidi_ui_snapshot out.png "prompt"` renders the editor to a PNG without a display (the screenshot above was made this way).
+
+`Tools/evaluate_orchestral.py` generates 20 orchestral game cues (`python3 Tools/evaluate_orchestral.py build/promptmidi-cli out/`). It measures each one against a checklist of what a professional score does: sections present, instrument ranges, strong-beat dissonance, low-register mud, outer-voice parallels, melodic shape, form and dynamics. It then prints a score per dimension. The scores are heuristics that point at weaknesses; they are not a substitute for listening.
 
 ## Project layout
 

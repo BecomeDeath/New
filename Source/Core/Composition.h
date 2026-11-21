@@ -55,6 +55,7 @@ struct Composition
     int ticksPerBar = 4 * kPpq;
     int lengthTicks = 0;
     int keyRoot = 0;
+    int endKeyRoot = 0;   // differs from keyRoot when the last section lifts to a new key
     Mode mode = Mode::Major;
     std::vector<Track> tracks;
     std::vector<ChordSlot> chords;
