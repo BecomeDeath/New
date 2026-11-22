@@ -75,6 +75,20 @@ void Settings::setEffort (const juce::String& effort)
     }
 }
 
+juce::String Settings::getPreviewSound() const
+{
+    return props() != nullptr ? props()->getValue ("previewSound").trim() : juce::String();
+}
+
+void Settings::setPreviewSound (const juce::String& sound)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("previewSound", sound.trim());
+        p->saveIfNeeded();
+    }
+}
+
 juce::String Settings::getArticulationOutput() const
 {
     const auto o = props() != nullptr ? props()->getValue ("articulationOutput").trim().toLowerCase() : juce::String();

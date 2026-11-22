@@ -126,6 +126,12 @@ int main()
         CHECK (back.form == comp.form && std::abs (back.quality.score - comp.quality.score) < 1e-6);
         CHECK (back.quality.notesText == comp.quality.notesText);
 
+        // ...and so does the request check, criterion by criterion.
+        CHECK (back.request.total() == comp.request.total() && back.request.met() == comp.request.met());
+
+        for (size_t k = 0; k < comp.request.criteria.size() && k < back.request.criteria.size(); ++k)
+            CHECK (back.request.criteria[k].label == comp.request.criteria[k].label);
+
         // Articulations, chord tones, pedals and split parts survive a project save.
         bool same = back.tracks.size() == comp.tracks.size();
 

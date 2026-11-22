@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "InstrumentPicker.h"
+#include "PresetIO.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Timeline.h"
@@ -203,6 +204,91 @@ int main()
         CHECK (q.getNumTakes() == 1 && q.hasComposition());
     }
 
+    std::printf ("presets and MIDI files\n");
+    {
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("promptmidi_preset_test");
+        dir.deleteRecursively();
+        dir.createDirectory();
+
+        PromptMidiProcessor a;
+        a.seedLocked = true;
+        a.seed = 21;
+        a.controls.tempo = 97;
+        a.generate ("Make me a soft piano midi");
+
+        // An edit travels with the preset.
+        auto notes = a.getComposition().tracks[0].notes;
+        pm::Note extra;
+        extra.start = 0;
+        extra.length = 480;
+        extra.pitch = 100;
+        extra.velocity = 77;
+        notes.push_back (extra);
+        a.editTrackNotes (0, notes, "Add note");
+        a.setTrackMuted (1, true);
+
+        const auto file = dir.getChildFile ("Soft piano.promptmidi");
+        CHECK (a.savePreset (file, "Soft piano"));
+
+        PromptMidiProcessor b;
+        juce::String error;
+        CHECK (b.loadPreset (file, error));
+        CHECK (b.getComposition().noteCount() == a.getComposition().noteCount());
+        CHECK (b.getComposition().title == a.getComposition().title);
+        CHECK (b.isEdited());
+        CHECK (b.isTrackMuted (1));
+        CHECK (b.controls.tempo == 97);
+        CHECK (b.prompt == "Make me a soft piano midi");
+        CHECK (b.getTakeTitle (b.getCurrentTake()).startsWith ("Preset"));
+
+        // A preset with only a prompt and settings is composed fresh.
+        auto promptOnly = a.presetToVar ("Prompt only");
+        promptOnly.getDynamicObject()->removeProperty ("piece");
+        PromptMidiProcessor c;
+        CHECK (c.presetFromVar (promptOnly, error));
+        CHECK (c.hasComposition() && c.controls.tempo == 97);
+
+        // Not a preset.
+        const auto junk = dir.getChildFile ("junk.promptmidi");
+        junk.replaceWithText ("{\"hello\": 1}");
+        CHECK (! c.loadPreset (junk, error) && error.isNotEmpty());
+
+        // Factory presets compose their prompt.
+        PromptMidiProcessor f;
+        f.loadFactoryPreset (6);
+        CHECK (f.hasComposition() && f.prompt == PresetIO::factoryPresets()[6].prompt);
+
+        // MIDI out and back in: the same notes, tempo, length and key.
+        const auto mid = dir.getChildFile ("piece.mid");
+        CHECK (a.writeMidiFile (mid));
+        PromptMidiProcessor m;
+        CHECK (m.importMidi (mid, error));
+        int expected = 0;
+
+        for (int t = 0; t < (int) a.getComposition().tracks.size(); ++t)
+            if (! a.isTrackMuted (t))
+                expected += (int) a.getComposition().tracks[(size_t) t].notes.size();
+
+        CHECK (m.getComposition().noteCount() == expected);
+        CHECK (m.getComposition().tempo == a.getComposition().tempo);
+        CHECK (m.getComposition().bars == a.getComposition().bars);
+        CHECK (m.getComposition().keyRoot == a.getComposition().keyRoot);
+        CHECK (m.isImportedPiece());
+
+        // Variation on an imported piece: new music for the same instruments.
+        const auto importedNotes = m.getComposition().noteCount();
+        m.makeVariation();
+        CHECK (! m.isImportedPiece() && m.hasComposition());
+        CHECK (m.getComposition().noteCount() != importedNotes);
+
+        // Not MIDI.
+        const auto text = dir.getChildFile ("notes.mid");
+        text.replaceWithText ("not a midi file");
+        CHECK (! m.importMidi (text, error) && error.isNotEmpty());
+
+        dir.deleteRecursively();
+    }
+
     std::printf ("instrument summary\n");
     {
         InstrumentPicker::Choices c;
@@ -260,6 +346,54 @@ int main()
         processor.auditionNote (0, 64, 100);
         CHECK (render (processor, 20, ons) > 0.001f);
 
+        processor.setPlayHead (nullptr);
+        processor.releaseResources();
+    }
+
+    std::printf ("the preview plays real instruments\n");
+    {
+        auto& engine = processor.getPreviewEngine();
+        engine.setSource ("");
+        CHECK (engine.getBank().waitUntilLoaded (20000));
+        engine.refresh();
+        CHECK (engine.getDescription() == "GeneralUser GS");
+
+        Head head;
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 512);
+        processor.setPreviewPlaying (true, 0.0);
+        int ons = 0;
+        const float peak = render (processor, 120, ons);
+        CHECK (processor.isPreviewSampled());
+        CHECK (peak > 0.01f && peak < 1.0f);
+        CHECK (ons == 0);                          // still nothing leaves as MIDI
+
+        // ...and still stops when the host plays.
+        head.playing = true;
+        render (processor, 4, ons);
+        render (processor, 200, ons);              // let the release and the reverb ring out
+        CHECK (render (processor, 20, ons) < 1.0e-4f);
+
+        // The sketch synth on request.
+        head.playing = false;
+        engine.setSource ("sketch");
+        CHECK (engine.getBank().waitUntilLoaded (5000));
+        engine.refresh();
+        processor.setPreviewPlaying (true, 0.0);
+        CHECK (render (processor, 60, ons) > 0.001f);
+        CHECK (! processor.isPreviewSampled());
+
+        // A missing SoundFont falls back to the sketch synth and says so.
+        engine.setSource ("/nonexistent/folder/none.sf2");
+        CHECK (engine.getBank().waitUntilLoaded (5000));
+        engine.refresh();
+        CHECK (engine.getDescription().startsWith ("Sketch synth"));
+        CHECK (render (processor, 60, ons) > 0.001f);
+
+        engine.setSource ("");
+        engine.getBank().waitUntilLoaded (20000);
+        engine.refresh();
+        processor.setPreviewPlaying (false);
         processor.setPlayHead (nullptr);
         processor.releaseResources();
     }
@@ -322,6 +456,14 @@ int main()
 
             const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
             CHECK (image.getWidth() == 1240);
+
+            // Files dropped on the window: MIDI and presets, nothing else.
+            if (auto* target = dynamic_cast<juce::FileDragAndDropTarget*> (editor.get()))
+            {
+                CHECK (target->isInterestedInFileDrag ({ "/tmp/a.mid" }));
+                CHECK (target->isInterestedInFileDrag ({ "/tmp/a.promptmidi" }));
+                CHECK (! target->isInterestedInFileDrag ({ "/tmp/a.txt" }));
+            }
 
             // A new piece closes the note editor.
             arrangement->selectTrack (1);

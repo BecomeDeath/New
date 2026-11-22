@@ -24,8 +24,11 @@ add_library (promptmidi_core STATIC
     Source/Core/LearnedData.cpp
     Source/Core/MidiFileWriter.cpp
     Source/Core/MusicTheory.cpp
+    Source/Core/Originality.cpp
+    Source/Core/OriginalityData.cpp
     Source/Core/PromptInterpreter.cpp
     Source/Core/QualityCheck.cpp
+    Source/Core/RequestCheck.cpp
     Source/Core/StyleSpec.cpp)
 
 target_include_directories (promptmidi_core PUBLIC Source/Core)
@@ -93,11 +96,34 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         Resources/Fonts/Inter-Medium.ttf
         Resources/Fonts/Inter-SemiBold.ttf)
 
+    # TinySoundFont (MIT, ThirdParty/TinySoundFont/LICENSE) plays the preview's SoundFont.
+    add_library (promptmidi_tsf STATIC ThirdParty/TinySoundFont/tsf.c)
+    target_include_directories (promptmidi_tsf PUBLIC ThirdParty/TinySoundFont)
+
+    if (NOT MSVC)
+        target_link_libraries (promptmidi_tsf PRIVATE m)
+    endif()
+
+    # The preview's instruments: GeneralUser GS (Resources/SoundFont/GeneralUser-GS-LICENSE.txt),
+    # copied into each bundle's Contents/Resources (or next to the app / test tool).
+    set (PROMPTMIDI_SOUNDFONT_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/Resources/SoundFont/GeneralUser-GS.sf2"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Resources/SoundFont/GeneralUser-GS-LICENSE.txt")
+
+    function (promptmidi_copy_soundfont target destination)
+        add_custom_command (TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${destination}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROMPTMIDI_SOUNDFONT_FILES} "${destination}"
+            VERBATIM)
+    endfunction()
+
     set (PROMPTMIDI_PLUGIN_SOURCES
         Source/Plugin/ClaudeClient.cpp
         Source/Plugin/InstrumentPicker.cpp
         Source/Plugin/PluginEditor.cpp
         Source/Plugin/PluginProcessor.cpp
+        Source/Plugin/PresetIO.cpp
+        Source/Plugin/PreviewEngine.cpp
         Source/Plugin/PreviewSynth.cpp
         Source/Plugin/Settings.cpp
         Source/Plugin/SpecJson.cpp
@@ -121,6 +147,7 @@ if (PROMPTMIDI_BUILD_PLUGIN)
     target_link_libraries (PromptMIDI
         PRIVATE
             promptmidi_core
+            promptmidi_tsf
             PromptMIDIData
             juce::juce_audio_utils
             juce::juce_audio_processors
@@ -129,6 +156,18 @@ if (PROMPTMIDI_BUILD_PLUGIN)
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)
+
+    get_target_property (PROMPTMIDI_VST3_BUNDLE PromptMIDI_VST3 JUCE_PLUGIN_ARTEFACT_FILE)
+    promptmidi_copy_soundfont (PromptMIDI_VST3 "${PROMPTMIDI_VST3_BUNDLE}/Contents/Resources")
+    get_target_property (PROMPTMIDI_APP PromptMIDI_Standalone JUCE_PLUGIN_ARTEFACT_FILE)
+
+    if (APPLE)
+        promptmidi_copy_soundfont (PromptMIDI_Standalone "${PROMPTMIDI_APP}/Contents/Resources")
+        get_target_property (PROMPTMIDI_AU_BUNDLE PromptMIDI_AU JUCE_PLUGIN_ARTEFACT_FILE)
+        promptmidi_copy_soundfont (PromptMIDI_AU "${PROMPTMIDI_AU_BUNDLE}/Contents/Resources")
+    else()
+        promptmidi_copy_soundfont (PromptMIDI_Standalone "$<TARGET_FILE_DIR:PromptMIDI_Standalone>")
+    endif()
 
     # Headless tests for the JSON / Claude request code (only needs juce_core).
     if (PROMPTMIDI_BUILD_TESTS)
@@ -156,16 +195,27 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         target_sources (promptmidi_ui_snapshot PRIVATE Tools/ui_snapshot.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
         target_include_directories (promptmidi_ui_snapshot PRIVATE Source/Plugin)
         target_compile_definitions (promptmidi_ui_snapshot PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
-        target_link_libraries (promptmidi_ui_snapshot PRIVATE promptmidi_core PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
+        target_link_libraries (promptmidi_ui_snapshot PRIVATE promptmidi_core promptmidi_tsf PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
                                PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+        # Renders the in-plugin preview to a WAV: promptmidi_render_preview out.wav "prompt" [seconds] [seed] [sketch]
+        juce_add_console_app (promptmidi_render_preview PRODUCT_NAME "promptmidi_render_preview" NEEDS_CURL TRUE)
+        target_sources (promptmidi_render_preview PRIVATE Tools/render_preview.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
+        target_include_directories (promptmidi_render_preview PRIVATE Source/Plugin)
+        target_compile_definitions (promptmidi_render_preview PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
+        target_link_libraries (promptmidi_render_preview PRIVATE promptmidi_core promptmidi_tsf PromptMIDIData juce::juce_audio_utils
+                               juce::juce_audio_processors juce::juce_gui_extra
+                               PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+        promptmidi_copy_soundfont (promptmidi_render_preview "$<TARGET_FILE_DIR:promptmidi_render_preview>")
 
         # The plug-in in-process: editing, variation, instruments, preview containment, the editor views.
         juce_add_console_app (promptmidi_editor_tests PRODUCT_NAME "promptmidi_editor_tests" NEEDS_CURL TRUE)
         target_sources (promptmidi_editor_tests PRIVATE Tests/EditorTests.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
         target_include_directories (promptmidi_editor_tests PRIVATE Source/Plugin)
         target_compile_definitions (promptmidi_editor_tests PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
-        target_link_libraries (promptmidi_editor_tests PRIVATE promptmidi_core PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
+        target_link_libraries (promptmidi_editor_tests PRIVATE promptmidi_core promptmidi_tsf PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
                                PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+        promptmidi_copy_soundfont (promptmidi_editor_tests "$<TARGET_FILE_DIR:promptmidi_editor_tests>")
         add_test (NAME editor_tests COMMAND promptmidi_editor_tests)
     endif()
 endif()

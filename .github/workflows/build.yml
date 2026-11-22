@@ -58,6 +58,9 @@ jobs:
           [ -f "$ART/Standalone/PromptMIDI.exe" ] && cp "$ART/Standalone/PromptMIDI.exe" dist/
           [ -f "$ART/Standalone/PromptMIDI" ] && cp "$ART/Standalone/PromptMIDI" dist/
           cp README.md dist/
+          # The preview's instruments ship inside the bundles; their licences go alongside.
+          cp Resources/SoundFont/GeneralUser-GS-LICENSE.txt dist/
+          cp ThirdParty/TinySoundFont/LICENSE dist/TinySoundFont-LICENSE.txt
 
           if [ "$RUNNER_OS" == "macOS" ]; then
             # Ad-hoc signature so Apple Silicon Macs will load the bundles.

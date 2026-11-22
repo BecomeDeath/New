@@ -4,7 +4,7 @@
 
 #include "ClaudeClient.h"
 #include "Composition.h"
-#include "PreviewSynth.h"
+#include "PreviewEngine.h"
 #include "PromptInterpreter.h"
 #include "Settings.h"
 
@@ -129,6 +129,22 @@ public:
     void auditionNote (int trackIndex, int pitch, int velocity);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
 
+    /** Presets (.promptmidi files: the prompt, the controls and, when there is one, the piece with
+        its edits) and MIDI files from anywhere. Loading or importing makes a new take. */
+    juce::var presetToVar (const juce::String& name) const;
+    bool presetFromVar (const juce::var&, juce::String& error);
+    bool savePreset (const juce::File&, const juce::String& name) const;
+    bool loadPreset (const juce::File&, juce::String& error);
+    void loadFactoryPreset (int index);
+    bool importMidi (const juce::File&, juce::String& error);
+    bool isImportedPiece() const;
+
+    /** The preview's sound (Settings): the built-in instruments, your SoundFont, or the sketch synth. */
+    void previewSoundChanged();
+    juce::String getPreviewSoundDescription() const          { return synth.getDescription(); }
+    bool isPreviewSampled() const                            { return synth.isSampled(); }
+    PreviewEngine& getPreviewEngine()                        { return synth; }
+
     /** For the editor's hints: how long since the host or audio device last asked for audio
         (a preview can't play without it), and whether that was while bypassed. */
     juce::uint32 getMsSinceLastAudio() const                 { return juce::Time::getMillisecondCounter() - lastBlockMs.load(); }
@@ -174,6 +190,8 @@ private:
     };
 
     void storeTake();             // the state on screen -> takes[currentTake]
+    double overlapWithOtherTakes() const;   // the most of this take's melody found in another take (0-1)
+    static constexpr double maxTakeOverlap = 0.4;
     void resetTakes();            // one take: the state on screen
     std::vector<Take> takes;
     int currentTake = -1;
@@ -233,7 +251,7 @@ private:
     bool wasPlaying = false;
     std::array<std::array<uint8_t, 128>, 16> activeNotes {};
     juce::MidiBuffer generatedMidi, panicMidi;
-    PreviewSynth synth;
+    PreviewEngine synth;
     bool synthHadSound = false;
     bool stopPreviewSound = false;
     int silentBlocks = 0;

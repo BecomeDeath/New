@@ -43,6 +43,11 @@ public:
     /** The values text for a mode's defaults ("keyswitch" or "cc"). */
     static juce::String defaultArticulationValues (const juce::String& output);
 
+    /** What the preview plays through: "" = the built-in instruments (General MIDI SoundFont),
+        "sketch" = the small sketch synth, or the full path of your own .sf2 SoundFont. */
+    juce::String getPreviewSound() const;
+    void setPreviewSound (const juce::String&);
+
     juce::File getFile() const;
 
     static constexpr const char* defaultModel = "claude-opus-5-5";

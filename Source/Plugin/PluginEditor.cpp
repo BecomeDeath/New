@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "SpecJson.h"
+#include "PresetIO.h"
 
 namespace
 {
@@ -9,6 +10,18 @@ namespace
     }
 
     juce::String fromStd (const std::string& s) { return juce::String::fromUTF8 (s.c_str()); }
+
+    /** A path as people read it: the home folder as "~". */
+    juce::String displayPath (const juce::File& f)
+    {
+        auto path = f.getFullPathName();
+        const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getFullPathName();
+
+        if (home.isNotEmpty() && path.startsWith (home))
+            path = "~" + path.substring (home.length());
+
+        return path;
+    }
 
     void styleLabel (juce::Label& l, float size, juce::Colour colour, bool bold = false)
     {
@@ -119,11 +132,7 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
 
     styleLabel (note, 12.0f, Theme::textDim);
     note.setJustificationType (juce::Justification::topLeft);
-    auto path = settings.getFile().getFullPathName();
-    const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getFullPathName();
-
-    if (home.isNotEmpty() && path.startsWith (home))
-        path = "~" + path.substring (home.length());
+    const auto path = displayPath (settings.getFile());
 
     note.setText ("Claude reads your prompt and writes the composition plan (key, harmony, instruments, theme); "
                   "PromptMIDI then writes the notes. The key is stored only on this computer, in\n"
@@ -141,6 +150,7 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
         settings.setArticulationOutput (articulationOutputFor (articulationBox.getSelectedId()));
         settings.setArticulationValues (valuesEditor.getText());
         settings.setArticulationController (controllerEditor.getText().getIntValue());
+        settings.setPreviewSound (soundSetting());
 
         if (onSaved)
             onSaved();
@@ -204,13 +214,81 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
                         "Exported and dragged MIDI then keeps each section on one track.",
                         juce::dontSendNotification);
 
+    // Preview sound
+    styleLabel (soundHeading, 16.0f, Theme::text, true);
+    soundHeading.setText ("Preview sound", juce::dontSendNotification);
+    styleLabel (soundNote, 12.0f, Theme::textDim);
+    soundNote.setJustificationType (juce::Justification::topLeft);
+    soundNote.setText ("Heard only inside PromptMIDI. The instruments are GeneralUser GS by S. Christian Collins, a General MIDI "
+                       "SoundFont; your own .sf2 works too (or put it in " + displayPath (SoundBank::userSoundFontFolder()) + ").",
+                       juce::dontSendNotification);
+
+    {
+        const auto current = settings.getPreviewSound();
+        soundChoice = current == "sketch" ? 2 : (current.isNotEmpty() ? 3 : 1);
+        soundPath = soundChoice == 3 ? current : juce::String();
+        rebuildSoundBox();
+    }
+
+    soundBox.onChange = [this]
+    {
+        const int id = soundBox.getSelectedId();
+
+        if (id != 4)
+        {
+            soundChoice = id;
+            return;
+        }
+
+        // Choose a SoundFont file.
+        soundChooser = std::make_unique<juce::FileChooser> ("Choose a SoundFont", SoundBank::userSoundFontFolder(), "*.sf2");
+        juce::Component::SafePointer<SettingsPanel> safe (this);
+        soundChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                   [safe] (const juce::FileChooser& fc)
+                                   {
+                                       if (safe == nullptr)
+                                           return;
+
+                                       const auto file = fc.getResult();
+
+                                       if (file.existsAsFile())
+                                       {
+                                           safe->soundPath = file.getFullPathName();
+                                           safe->soundChoice = 3;
+                                       }
+
+                                       safe->rebuildSoundBox();
+                                   });
+    };
+
+    for (auto* c : std::initializer_list<juce::Component*> { &soundHeading, &soundNote, &soundBox })
+        addAndMakeVisible (c);
+
     for (auto* c : std::initializer_list<juce::Component*> { &heading, &keyLabel, &modelLabel, &effortLabel, &note,
                                                              &keyEditor, &modelEditor, &effortBox, &saveButton, &clearButton,
                                                              &exportHeading, &articulationLabel, &valuesLabel, &controllerLabel,
                                                              &exportNote, &articulationBox, &valuesEditor, &controllerEditor })
         addAndMakeVisible (c);
 
-    setSize (500, 560);
+    setSize (520, 650);
+}
+
+void SettingsPanel::rebuildSoundBox()
+{
+    soundBox.clear (juce::dontSendNotification);
+    soundBox.addItem ("Instruments - GeneralUser GS (General MIDI)", 1);
+    soundBox.addItem ("Sketch synth (lightest on the CPU)", 2);
+
+    if (soundPath.isNotEmpty())
+        soundBox.addItem ("Your SoundFont: " + juce::File (soundPath).getFileName(), 3);
+
+    soundBox.addItem ("Choose a SoundFont (.sf2)...", 4);
+    soundBox.setSelectedId (soundChoice == 3 && soundPath.isEmpty() ? 1 : soundChoice, juce::dontSendNotification);
+}
+
+juce::String SettingsPanel::soundSetting() const
+{
+    return soundChoice == 2 ? juce::String ("sketch") : (soundChoice == 3 ? soundPath : juce::String());
 }
 
 juce::String SettingsPanel::articulationOutputFor (int id) const
@@ -265,10 +343,79 @@ void SettingsPanel::resized()
     exp.removeFromTop (6);
     exportNote.setBounds (exp);
 
+    // Preview sound, above the export section
+    auto snd = r.removeFromBottom (96);
+    soundHeading.setBounds (snd.removeFromTop (26));
+    soundBox.setBounds (snd.removeFromTop (28));
+    snd.removeFromTop (6);
+    soundNote.setBounds (snd);
+
     r.removeFromBottom (8);
     note.setBounds (r);
 }
 
+
+//==============================================================================
+SavePresetPanel::SavePresetPanel (const juce::String& suggestedName, bool hasPiece, std::function<void (const juce::String&)> saved)
+    : onSave (std::move (saved))
+{
+    styleLabel (heading, 16.0f, Theme::text, true);
+    heading.setText ("Save preset", juce::dontSendNotification);
+    styleLabel (note, 12.0f, Theme::textDim);
+    note.setJustificationType (juce::Justification::topLeft);
+    note.setText (juce::String (hasPiece ? "Saves the prompt, the settings and this piece with its edits" : "Saves the prompt and the settings")
+                      + ", in " + displayPath (PresetIO::presetsFolder()) + ". Presets can be shared: anyone can import them.",
+                  juce::dontSendNotification);
+
+    nameEditor.setFont (Theme::font (14.0f));
+    nameEditor.setText (suggestedName, false);
+    nameEditor.setTextToShowWhenEmpty ("Preset name", Theme::textDim);
+    nameEditor.setEscapeAndReturnKeysConsumed (false);
+    nameEditor.onReturnKey = [this] { save(); };
+
+    saveButton.setColour (juce::TextButton::buttonColourId, Theme::accent);
+    saveButton.onClick = [this] { save(); };
+    cancelButton.onClick = [this] { if (auto* box = findParentComponentOfClass<juce::CallOutBox>()) box->dismiss(); };
+
+    for (auto* c : std::initializer_list<juce::Component*> { &heading, &note, &nameEditor, &saveButton, &cancelButton })
+        addAndMakeVisible (c);
+
+    setSize (380, 170);
+}
+
+void SavePresetPanel::save()
+{
+    const auto name = nameEditor.getText().trim();
+
+    if (name.isEmpty())
+        return;
+
+    if (onSave)
+        onSave (name);
+
+    if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+        box->dismiss();
+}
+
+void SavePresetPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (Theme::panel);
+}
+
+void SavePresetPanel::resized()
+{
+    auto r = getLocalBounds().reduced (16);
+    heading.setBounds (r.removeFromTop (24));
+    r.removeFromTop (8);
+    nameEditor.setBounds (r.removeFromTop (30));
+    r.removeFromTop (8);
+    auto buttons = r.removeFromBottom (30);
+    saveButton.setBounds (buttons.removeFromRight (90));
+    buttons.removeFromRight (8);
+    cancelButton.setBounds (buttons.removeFromRight (90));
+    r.removeFromBottom (6);
+    note.setBounds (r);
+}
 
 //==============================================================================
 PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
@@ -299,7 +446,12 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
             showSettings();
     };
 
-    settingsButton.setTooltip ("Settings: Claude API key and model, MIDI export articulations");
+    presetsButton.setTooltip ("Presets: save this piece and its settings, load one, or import and export presets and MIDI files "
+                              "(you can also drop a .mid or .promptmidi file anywhere on the window)");
+    presetsButton.onClick = [this] { showPresetsMenu(); };
+    addAndMakeVisible (presetsButton);
+
+    settingsButton.setTooltip ("Settings: Claude API key and model, preview sound, MIDI export articulations");
     settingsButton.onClick = [this] { showSettings(); };
     addAndMakeVisible (settingsButton);
 
@@ -466,7 +618,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     loopButton.setClickingTogglesState (true);
     loopButton.setTooltip ("Loop the preview. Cues with loop points play the intro once, then repeat the loop region (green), as a game would.");
     soundButton.setClickingTogglesState (true);
-    soundButton.setTooltip ("Preview sound (a simple sketch synth, heard only inside PromptMIDI)");
+    soundButton.setTooltip ("Preview sound, heard only inside PromptMIDI");
     hostMidiToggle.setTooltip ("Off (default): PromptMIDI stays silent while your DAW plays. On: it sends the piece as MIDI out in time "
                                "with the host transport, to drive instruments on other tracks (never audio).");
 
@@ -566,6 +718,8 @@ void PromptMidiEditor::resized()
     header.removeFromRight (12);
     claudeButton.setBounds (header.removeFromRight (100));
     offlineButton.setBounds (header.removeFromRight (88));
+    header.removeFromRight (12);
+    presetsButton.setBounds (header.removeFromRight (108));
 
     // Footer
     auto footer = r.removeFromBottom (64).reduced (pad, 12);
@@ -657,7 +811,7 @@ void PromptMidiEditor::resized()
     statusLabel.setBounds (line1.removeFromRight (line1.getWidth() / 2));
     titleLabel.setBounds (line1);
     auto line2 = r.removeFromTop (20);
-    qualityLabel.setBounds (line2.removeFromRight (juce::jmin (420, line2.getWidth() / 2)));
+    qualityLabel.setBounds (line2.removeFromRight (juce::jmin (520, line2.getWidth() / 2)));
     summaryLabel.setBounds (line2);
     interpretationLabel.setBounds (r.removeFromTop (18));
     r.removeFromTop (10);
@@ -665,7 +819,190 @@ void PromptMidiEditor::resized()
     arrangement.setBounds (r.withTrimmedBottom (14));
 }
 
+void PromptMidiEditor::paintOverChildren (juce::Graphics& g)
+{
+    if (! fileDragHover)
+        return;
+
+    // Dropping a file: the whole window is the target.
+    auto r = getLocalBounds().toFloat().reduced (6.0f);
+    g.setColour (Theme::background.withAlpha (0.72f));
+    g.fillRoundedRectangle (r, 10.0f);
+    g.setColour (Theme::accent);
+    g.drawRoundedRectangle (r, 10.0f, 2.0f);
+    g.setColour (Theme::text);
+    g.setFont (Theme::font (20.0f, Theme::Weight::SemiBold));
+    g.drawText ("Drop to import", r.withTrimmedBottom (r.getHeight() * 0.5f - 6.0f), juce::Justification::centredBottom);
+    g.setColour (Theme::textMid);
+    g.setFont (Theme::font (14.0f));
+    g.drawText ("A MIDI file opens as a new take; a .promptmidi preset loads its prompt, settings and piece",
+                r.withTrimmedTop (r.getHeight() * 0.5f + 6.0f), juce::Justification::centredTop);
+}
+
 //==============================================================================
+bool PromptMidiEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    if (MidiDragSource::isDraggingOut())
+        return false;   // our own drag on its way to the DAW
+
+    for (auto& f : files)
+        if (juce::File (f).hasFileExtension ("mid;midi;promptmidi"))
+            return true;
+
+    return false;
+}
+
+void PromptMidiEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    fileDragHover = false;
+    repaint();
+
+    for (auto& f : files)
+    {
+        const juce::File file (f);
+
+        if (file.hasFileExtension ("mid;midi;promptmidi"))
+        {
+            importFile (file);
+            return;
+        }
+    }
+}
+
+void PromptMidiEditor::importFile (const juce::File& file)
+{
+    juce::String error;
+    const bool ok = file.hasFileExtension ("promptmidi") ? processor.loadPreset (file, error) : processor.importMidi (file, error);
+
+    if (! ok)
+        setStatusText (error, Theme::error);
+    else
+        promptEditor.setText (processor.prompt, false);
+}
+
+void PromptMidiEditor::showPresetsMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&lookAndFeel);
+    const bool hasSomething = processor.hasComposition() || promptEditor.getText().trim().isNotEmpty();
+    const bool busy = processor.isGenerating();
+
+    menu.addItem (1, "Save preset...", hasSomething && ! busy);
+    menu.addSeparator();
+
+    juce::PopupMenu mine, factory;
+    mine.setLookAndFeel (&lookAndFeel);
+    factory.setLookAndFeel (&lookAndFeel);
+    const auto files = PresetIO::userPresets();
+
+    for (int i = 0; i < files.size() && i < 500; ++i)
+        mine.addItem (1000 + i, files[i].getFileNameWithoutExtension(), ! busy);
+
+    if (files.isEmpty())
+        mine.addItem (-1, "None yet - save one first", false);
+
+    const auto& factoryList = PresetIO::factoryPresets();
+
+    for (int i = 0; i < (int) factoryList.size(); ++i)
+        factory.addItem (2000 + i, factoryList[(size_t) i].name, ! busy);
+
+    menu.addSubMenu ("Your presets", mine);
+    menu.addSubMenu ("Factory presets", factory);
+    menu.addSeparator();
+    menu.addItem (2, "Import a preset or MIDI file...", ! busy);
+    menu.addItem (3, "Export this preset...", hasSomething && ! busy);
+    menu.addItem (4, "Export MIDI...", processor.hasComposition());
+    menu.addSeparator();
+    menu.addItem (5, "Show the presets folder");
+
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetsButton), [safe, files] (int result)
+    {
+        if (safe == nullptr || result == 0)
+            return;
+
+        auto& self = *safe;
+
+        if (result == 1)       self.savePreset();
+        else if (result == 2)  self.chooseFileToImport();
+        else if (result == 3)  self.exportPreset();
+        else if (result == 4)  self.exportMidi();
+        else if (result == 5)
+        {
+            PresetIO::presetsFolder().createDirectory();
+            PresetIO::presetsFolder().revealToUser();
+        }
+        else if (result >= 2000)
+        {
+            self.processor.loadFactoryPreset (result - 2000);
+            self.promptEditor.setText (self.processor.prompt, false);
+        }
+        else if (result >= 1000 && result - 1000 < files.size())
+        {
+            self.importFile (files[result - 1000]);
+        }
+    });
+}
+
+void PromptMidiEditor::savePreset()
+{
+    processor.prompt = promptEditor.getText().trim();
+    const auto& comp = processor.getComposition();
+    const juce::String suggested = processor.hasComposition() ? fromStd (comp.title) : processor.prompt.substring (0, 40);
+
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    auto panel = std::make_unique<SavePresetPanel> (suggested, processor.hasComposition(), [safe] (const juce::String& name)
+    {
+        if (safe == nullptr)
+            return;
+
+        const auto file = PresetIO::presetsFolder().getChildFile (juce::File::createLegalFileName (name) + PresetIO::presetExtension);
+        const bool replaced = file.existsAsFile();
+        const bool ok = safe->processor.savePreset (file, name);
+        safe->setStatusText (ok ? "Saved the preset \"" + name + "\"" + (replaced ? juce::String (" (replacing the old one).") : juce::String ("."))
+                                : "Couldn't write " + file.getFullPathName(), ok ? Theme::ok : Theme::error);
+    });
+
+    juce::CallOutBox::launchAsynchronously (std::move (panel), presetsButton.getBounds(), this);
+}
+
+void PromptMidiEditor::exportPreset()
+{
+    processor.prompt = promptEditor.getText().trim();
+    const auto name = processor.hasComposition() ? fromStd (processor.getComposition().title) : juce::String ("PromptMIDI preset");
+    const auto start = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                           .getChildFile (juce::File::createLegalFileName (name) + PresetIO::presetExtension);
+    chooser = std::make_unique<juce::FileChooser> ("Export preset", start, juce::String ("*") + PresetIO::presetExtension);
+
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [safe, name] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr || fc.getResult() == juce::File())
+                                  return;
+
+                              const auto file = fc.getResult().withFileExtension (PresetIO::presetExtension);
+                              const bool ok = safe->processor.savePreset (file, name);
+                              safe->setStatusText (ok ? "Exported " + file.getFileName() : "Couldn't write " + file.getFullPathName(),
+                                                   ok ? Theme::ok : Theme::error);
+                          });
+}
+
+void PromptMidiEditor::chooseFileToImport()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Import a preset or MIDI file", PresetIO::presetsFolder().isDirectory()
+                                                       ? PresetIO::presetsFolder() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                   "*.promptmidi;*.mid;*.midi");
+
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
+    {
+        if (safe != nullptr && fc.getResult().existsAsFile())
+            safe->importFile (fc.getResult());
+    });
+}
+
 bool PromptMidiEditor::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::spaceKey && processor.hasComposition())
@@ -790,16 +1127,35 @@ void PromptMidiEditor::refreshFromProcessor()
     setStatusText (processor.getStatusMessage(), status == PromptMidiProcessor::Status::Error ? Theme::error
                                                : status == PromptMidiProcessor::Status::Working ? Theme::accentHot : Theme::textDim);
 
-    // Every generation is checked; show the verdict, with the details and the form on hover.
+    // Every generation is checked against the request and for quality; show the verdict, with
+    // each criterion, the details and the form on hover.
     if (has && comp.quality.score > 0.0)
     {
+        const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
+        const auto& request = comp.request;
         juce::String q;
+
+        if (request.total() > 0)
+            q << (request.allMet() ? juce::String ("Matches your request") : juce::String ("Request"))
+              << " " << request.met() << "/" << request.total() << dot;
+
         q << "Quality " << juce::String (comp.quality.score, 1) << " / 10";
 
         if (comp.quality.candidates > 1)
-            q << juce::String::fromUTF8 ("  \xc2\xb7  ") << "best of " << comp.quality.candidates << " drafts";
+            q << dot << "best of " << comp.quality.candidates << " drafts";
 
         juce::StringArray details;
+
+        if (request.total() > 0)
+        {
+            details.add ("What you asked for:");
+
+            for (auto& c : request.criteria)
+                details.add (juce::String::fromUTF8 (c.met ? "  \xe2\x9c\x93  " : "  \xe2\x9c\x97  ") + fromStd (c.label)
+                             + (c.met ? juce::String() : " (" + fromStd (c.detail) + ")"));
+
+            details.add ({});
+        }
 
         if (! comp.form.empty())
             details.add ("Form: " + fromStd (comp.form));
@@ -812,7 +1168,8 @@ void PromptMidiEditor::refreshFromProcessor()
             details.add (fromStd (line));
 
         qualityLabel.setText (q, juce::dontSendNotification);
-        qualityLabel.setColour (juce::Label::textColourId, comp.quality.score >= 8.5 ? Theme::ok
+        qualityLabel.setColour (juce::Label::textColourId, ! request.allMet() ? Theme::playhead
+                                                         : comp.quality.score >= 8.5 ? Theme::ok
                                                          : comp.quality.score >= 7.0 ? Theme::playhead : Theme::error);
         qualityLabel.setTooltip (details.joinIntoString ("\n"));
     }
@@ -860,6 +1217,12 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
+    if (const auto sound = processor.getPreviewSoundDescription(); sound != shownSound)
+    {
+        shownSound = sound;
+        soundButton.setTooltip ("Preview sound: " + sound + ". Heard only inside PromptMIDI; change it in Settings.");
+    }
+
     const bool playing = processor.isPreviewPlaying();
     const double head = processor.getPlayheadTick();
     arrangement.setPlayhead (head);
@@ -952,9 +1315,16 @@ void PromptMidiEditor::pullControls()
 void PromptMidiEditor::showSettings()
 {
     juce::Component::SafePointer<PromptMidiEditor> safe (this);
-    auto panel = std::make_unique<SettingsPanel> (*processor.settings, [safe]
+    const bool hadKey = processor.settings->hasApiKey();
+    auto panel = std::make_unique<SettingsPanel> (*processor.settings, [safe, hadKey]
     {
-        if (safe != nullptr && safe->processor.settings->hasApiKey())
+        if (safe == nullptr)
+            return;
+
+        safe->processor.previewSoundChanged();
+
+        // A key just added means you want Claude; saving other settings leaves the engine alone.
+        if (! hadKey && safe->processor.settings->hasApiKey())
         {
             safe->processor.engine = PromptMidiProcessor::Engine::Claude;
             safe->updateEngineButtons();

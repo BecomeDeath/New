@@ -62,6 +62,11 @@ void applyInstrumentChoices (StyleSpec&, const std::vector<InstrumentChoice>&);
 */
 StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const PromptOverrides& overrides = {});
 
+/** What a prompt (and the controls) ask for, as checkable criteria: the instruments (only these,
+    with these, without these, who leads, how many players), key, scale, tempo, length, meter and
+    dynamics. The same reading interpretPrompt uses; it fills StyleSpec::request. */
+Request parseRequest (const std::string& prompt, const PromptOverrides& overrides = {});
+
 struct StyleInfo
 {
     std::string id;

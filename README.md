@@ -16,6 +16,8 @@
 - **Two engines:**
   - **Offline** (default): instant, free, no internet. A built-in interpreter recognises 40+ styles (including 12 orchestral game and film archetypes), 20+ moods, 60+ instruments and explicit settings, then a composition engine writes the music.
   - **Claude AI** (optional): Claude reads your prompt and writes the *composition plan* (key, mode, chord progression, instrumentation, registers, playing patterns, arrangement and a main theme). PromptMIDI's engine then writes the notes from that plan, so the MIDI is always valid and playable, even for unusual prompts such as *"music for a dwarven forge at night"*.
+- **It does what you asked:** every prompt becomes a list of criteria (*only piano*, *a trio*, *the tenor sax plays the melody*, *no drums*, *D minor*, *140 BPM*, *about 30 seconds*, *3/4*, *soft*...). The plan is built to meet them, every draft is checked against them, and the plug-in shows the result: *Matches your request 5/5*, with each criterion on hover. See [Does it match the request?](#does-it-match-the-request).
+- **New music, never a copy:** the engine learned only statistics from its reference corpus (no melody or piece is stored), and every generated tune is also checked against fingerprints of the corpus's melodies, so nothing it writes reproduces a passage of a downloaded MIDI file. Each Variation is also checked against your earlier takes. See [Originality](#originality).
 - **Different every time:** themes, rhythms and harmony draw on statistics learned from about 28,000 pieces of the Lakh MIDI Dataset (see [Credits and data](#credits-and-data)), forms and orchestration vary from piece to piece, and **Variation** gives genuinely new music (new tune, harmony, form and orchestration) while keeping the key, tempo, length and instruments.
 - **Your own instruments:** compose for exactly the instruments you pick, from a single piano, cello or guitar (a solo piece) to any ensemble, each with an automatic or chosen role.
 - **A DAW-style editor:** scroll and zoom through the whole piece, see every section, chord and loop point, click the ruler to play from anywhere, and open any track in a note editor to move, resize, add and delete notes (with undo).
@@ -31,7 +33,8 @@
   - **Export .mid**: a type-1 MIDI file with one named track per instrument, GM program changes, tempo, time and key signatures, section markers and loop points.
   - **Articulations for sample libraries:** choose General MIDI (pizzicato and tremolo on their own tracks), **keyswitch notes**, or **controller values** such as Spitfire's UACC (CC32) in **Settings**; the numbers are editable to match your library.
   - **Optional live MIDI output** in time with the host transport ("Send MIDI with host", off by default). When looping, a cue with loop points plays its intro once and then repeats the loop region, the way a game engine would.
-- **Built-in preview sound**, so you can hear the result before routing it to your own instruments. It is heard only while you press Play inside PromptMIDI: never during your DAW's playback, and it stops when you drag MIDI out, when the host starts or when the window closes. Bypassing the plug-in ends every note it started.
+- **Hear the real instruments:** the preview plays the piece through a General MIDI sample set (GeneralUser GS): piano, strings, brass, woodwinds, choir, guitars, synths and drum kits, with a little room reverb. You can also use your own `.sf2` SoundFont, or the light sketch synth (**Settings > Preview sound**). It is heard only while you press Play inside PromptMIDI: never during your DAW's playback, and it stops when you drag MIDI out, when the host starts or when the window closes. Bypassing the plug-in ends every note it started.
+- **Presets, MIDI in and out:** save a piece with its prompt, settings and edits as a preset, load it again or share it (`.promptmidi` files), start from 16 factory presets, and **import any MIDI file** (from the Presets menu, or by dropping it on the window) to view, edit, preview and drag it out again, or press Variation for new music for its instruments. See [Presets and MIDI files](#presets-and-midi-files).
 - **Key / Scale / Tempo / Bars / Length / Instruments** controls re-shape the current result instantly. **Seed** with **Lock** makes results reproducible.
 - **Mute** tracks to leave them out of playback and export. Everything is saved with your DAW project. The API key is not.
 
@@ -46,6 +49,15 @@
 - **Mute** a track with **M**; drag a track's header into the DAW to get that track alone. Under each track's name: the sound it asks for and the range it plays.
 - **If Play does nothing:** the preview needs audio running. In the standalone app choose an output in Options > Audio/MIDI Settings; in a DAW check that its audio engine is on and the plug-in isn't bypassed. PromptMIDI says which in the status line.
 
+## Presets and MIDI files
+
+The **Presets** button (top right) has everything for getting things in and out:
+
+- **Save preset...** stores the prompt, the engine, the Key / Scale / Tempo / Bars / Length / Instruments settings and, if there is one, the piece itself with your note edits and mutes, as a `.promptmidi` file in `Documents/PromptMIDI/Presets`. **Your presets** lists them; loading one brings the piece back exactly, as a new take.
+- **Factory presets**: 16 starting points (fantasy cue, boss battle, villain's castle, solo piano ballad, string quartet, lo-fi beat, late-night jazz, synthwave, celtic tavern...). They hold a prompt and a length and are composed fresh each time you load them.
+- **Import a preset or MIDI file...**: a `.promptmidi` preset from someone else, or any Standard MIDI File. Dropping either onto the PromptMIDI window does the same. An imported MIDI file becomes a new take: its tracks (split by channel), instruments, notes, sustain and expression, tempo, meter, key and markers. You can play it through the preview, mute tracks, edit notes, drag it into your DAW, or press **Variation** for new music for the same instruments, key and tempo.
+- **Export this preset...** and **Export MIDI...** save copies wherever you like.
+
 ## Your own instruments
 
 Click **Instruments** and choose **My instruments** (or **Customise these** to start from the instruments the piece on screen uses), then add instruments by category (orchestral sections, woodwinds, brass, percussion, keys, guitars and bass, synths, solo and world instruments) or start from a preset (solo piano, string quartet, woodwind quintet, rock band, jazz trio...). Each instrument's role can be left on **Auto** or set (melody, counter-melody, chords, pad, arpeggio, bass, ostinato). The prompt still sets the style, mood, key and tempo.
@@ -54,6 +66,36 @@ Click **Instruments** and choose **My instruments** (or **Customise these** to s
 - **Auto roles** follow an arranger's habits: the most melodic instrument takes the tune, a bass instrument (or the lowest of three or more) the bass, keyboards and guitars the chords, harps and mallets the arpeggios, string sections and choir the pads.
 - **Three or more instruments in an orchestral style** get a full cue; smaller groups and other styles are composed as pieces of the chosen **Length**.
 - In **Claude AI** mode the list is sent with the request and the plan is rebuilt around it.
+
+## Does it match the request?
+
+Every prompt (and every control you set) becomes a set of criteria. The plan is built to meet them, the finished notes are checked against them, and drafts that miss one are composed again with other seeds before PromptMIDI settles. The result shows under the title (*Matches your request 5/5*); hover over it for each criterion, with what was found when one isn't met.
+
+| You ask for | The piece must |
+|---|---|
+| `a piano piece`, `sad piano ballad`, `waltz for piano`, `epic choir and organ`, `just drums`, `solo cello` | use only those instruments, and every one of them must play |
+| `lo-fi beat with a mellow electric piano`, `orchestral theme with woodwinds and harp` | keep the style's own arrangement and include those instruments |
+| `jazz combo with a tenor sax lead`, `guitar solo` | give that instrument the melody |
+| `jazz piano trio`, `cello and piano duet`, `string quartet`, `woodwind quintet` | have that many players (a jazz trio drops the sax; a string trio is violin, viola and cello; a woodwind quintet has its horn) |
+| `no drums`, `without percussion`, `rock song with no guitar` | leave them out (percussion includes timpani and mallets) |
+| `in D minor`, `dorian`, `sad` / `happy` | be in that key, scale, or a minor / major key |
+| `140 bpm`, `slow`, `fast` | have that tempo (slow: 100 BPM or less; fast: 116 or more) |
+| `30 seconds`, `2 minutes`, `16 bars`, `short`, `long`, the Length control | last that long (the tempo is nudged a little so the length lands on time) |
+| `waltz`, `3/4`, `jig`, `6/8` | be in that meter |
+| `soft`, `gentle` / `loud`, `powerful` | play softly / strongly |
+
+Instruments named on their own, with no band, orchestra or genre bringing its own (*"sad piano ballad"*, *"happy ukulele song"*, *"funky bass and drums"*), are the whole ensemble. Instruments added with *with*, *featuring* or *plus*, or orchestral sections named in an orchestral style (*"heroic theme, triumphant brass and strings"*), join the style's arrangement. Your own instruments (the **Instruments** button) are always the whole ensemble. Plans from **Claude AI** are held to the same criteria. In the CLI, the criteria are printed after each generation.
+
+## Originality
+
+PromptMIDI composes; it never retrieves. The reference corpus (the MIDI files listed under [Credits and data](#credits-and-data)) was used only to learn statistics: how often a melody steps or leaps after a given move, common one-bar rhythms, common four-chord progressions. No melody, part or piece from it is stored in the plug-in, so it cannot play one back.
+
+Every generation is checked as well:
+
+- **Against the corpus.** The melodies of the files the statistics were learned from (24,462 usable lead lines) are stored as fingerprints in a Bloom filter (`Source/Core/OriginalityData.cpp`, 1.7 MB of hashed bits, built by `Tools/corpus/build_originality_index.py`): runs of ten melodic moves (interval and rhythm), so a passage is recognised in any key or tempo. Common figures don't count: runs found in more than 20 of the 136,982 downloaded lead lines (scales, stock figures; the threshold allows for the several versions of popular songs in the Lakh set), runs of mostly repeated notes, and runs that repeat one short cell (an ostinato). If three or more fingerprints of a melodic part turn up close together, the draft fails the *Original melody* criterion and another is composed. In tests the check catches 90% of whole corpus tunes played back to it (transposed), and flags none of PromptMIDI's own melodic parts.
+- **Against your other takes.** A Variation shares little of its melody with the takes before it; if one repeats more than 40% of an earlier take's melodic runs, PromptMIDI composes another (and shows *Different from your other takes*).
+
+`Tools/corpus/audit_originality.py` repeats the corpus check exactly (not through the filter) against every downloaded file. Run on 300 generations across 20 prompts, against all 136,982 usable lead lines of the 168,385 downloaded files: no melodic part shared more than 3 fingerprints with any one file, and no tune was among the closest matches (the closest was a 13-note half-note neighbour figure in a trombone accompaniment).
 
 ## Orchestral cues
 
@@ -85,7 +127,7 @@ Libraries differ, so check your library's articulation list and edit the eight n
 
 Every push builds Windows, macOS (Universal) and Linux binaries in GitHub Actions: open the **Actions** tab, select the latest **Build** run and download the `PromptMIDI-<OS>` artifact.
 
-Install the plug-in by copying `PromptMIDI.vst3` to:
+Install the plug-in by copying the whole `PromptMIDI.vst3` folder (it carries the preview's instrument sounds inside, in `Contents/Resources`) to:
 
 | OS | VST3 folder |
 |---|---|
@@ -152,7 +194,7 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Outputs are in `build/PromptMIDI_artefacts/Release/` (`VST3/`, `Standalone/` and `AU/` on macOS). To copy the VST3 into your system plug-in folder automatically, configure with `-DPROMPTMIDI_COPY_PLUGIN=ON`. To use an existing JUCE checkout instead of downloading one, add `-DPROMPTMIDI_JUCE_DIR=/path/to/JUCE`.
+Outputs are in `build/PromptMIDI_artefacts/Release/` (`VST3/`, `Standalone/` and `AU/` on macOS). The preview's SoundFont is copied into each bundle's `Contents/Resources` (and next to the app on Windows and Linux); the app also finds it in a `PromptMIDI.vst3` beside it or in an installed one, and in `PromptMIDI/Sounds` in your user application-data folder. To copy the VST3 into your system plug-in folder automatically, configure with `-DPROMPTMIDI_COPY_PLUGIN=ON`. To use an existing JUCE checkout instead of downloading one, add `-DPROMPTMIDI_JUCE_DIR=/path/to/JUCE`.
 
 On Linux, first install the JUCE dependencies:
 
@@ -173,10 +215,13 @@ The engine alone has no dependencies. `-DPROMPTMIDI_BUILD_PLUGIN=OFF` builds jus
 - `core_tests`: chord parsing, prompt interpretation, composer invariants (no overlapping notes, ranges, determinism, melody lands on chord tones, endings resolve), MIDI file validity; every style is checked with several seeds and meters. For cues: lengths, forms, loop points and markers; 15 orchestral prompts x 3 seeds must pass the quality check (score 8.5+, no wrong harmony notes, nothing out of range, little clash and mud); the full orchestra, articulations, keyswitch and UACC export; and that themes are developed (passed between instruments, restatements reharmonised).
 - `json_tests`: the plan schema is valid for structured outputs; spec and composition JSON round trips (including articulations, chord tones, pedals, markers, loop points and quality, and states saved by older versions); Claude request bodies, headers and response, refusal and error handling; an orchestral plan from Claude becomes a full cue.
 - `vst3_host_test`: loads the built `PromptMIDI.vst3` through JUCE's VST3 hosting, restores a project state, runs the transport and checks that PromptMIDI is silent and sends nothing while the host plays (by default), that "Send MIDI with host" sends notes but no audio, that bypassing ends every note, that a looping cue keeps cycling through its loop region past the end, and the saved state.
-- `editor_tests`: the plug-in in-process: note edits with undo and redo (including Ctrl / Cmd + Z from the window), Variation, the take history, your own instruments, the preview stopping when the host plays, note audition, the play cursor, and the arrangement view (zooming in when the note editor opens, Esc closing it).
+- `editor_tests`: the plug-in in-process: note edits with undo and redo (including Ctrl / Cmd + Z from the window), Variation, the take history, presets (save with edits and mutes, load, prompt-only and factory presets), MIDI export and re-import, Variation on an imported piece, your own instruments, the preview's sampled instruments (and the sketch synth fallback) staying inside the plug-in and stopping when the host plays, note audition, the play cursor, file drops, and the arrangement view (zooming in when the note editor opens, Esc closing it).
+- Core tests also check requests (30 prompts x 2 seeds must meet every criterion, and the notes really are what was asked: piano only, a trio without the sax, no guitar, the sax leading, the right length and key...) and originality (the fingerprints match the corpus tool's, a copied and transposed melody is caught, generations are original against the real index).
 - Core tests also cover the learned models, that variations differ (harmony and tune), and custom ensembles (solo piano on one track, duos, bands, orchestras, user-set roles).
 
-`promptmidi_ui_snapshot out.png "prompt" [scale] [width] [height] [track] [zoom]` renders the editor to a PNG without a display (the screenshots above were made this way).
+`promptmidi_ui_snapshot out.png "prompt" [scale] [width] [height] [track] [zoom] [variations]` renders the editor to a PNG without a display (the screenshots above were made this way).
+
+`promptmidi_render_preview out.wav "prompt" [seconds] [seed] [sketch]` renders the in-plugin preview to a WAV file, as Play would play it.
 
 `Tools/variety.py build/promptmidi-cli` measures how alike repeated generations and variations are (theme, contour, rhythm, harmony, form and lead instruments).
 
@@ -192,11 +237,16 @@ Source/Core/     Engine: plain C++17, no JUCE
   Composer       plan -> notes (harmony, melody, accompaniment patterns, drums); best-of-N takes
   CueEngine      orchestral cues: form, phrase harmony, thematic development, orchestration, transitions
   QualityCheck   the check every generation goes through, and the repair pass
+  Request, RequestCheck  what the prompt asks for, applied to the plan and checked on the notes
+  Originality    melodic fingerprints; the check against the corpus index (OriginalityData, generated)
   Learned        uses the corpus statistics (LearnedData, generated) for rhythms, intervals and progressions
   MidiFileWriter notes -> Standard MIDI File (markers, loop points, keyswitch / CC articulations)
 Source/Plugin/   JUCE plug-in: processor, editor, arrangement and note editor (Timeline), instrument picker,
-                 preview synth, Claude client, JSON
+                 presets and MIDI import (PresetIO), preview engine (SoundFont player and sketch synth),
+                 Claude client, JSON
 Resources/Fonts/ the Inter typeface (SIL Open Font License)
+Resources/SoundFont/ GeneralUser GS, the preview's instruments (its licence alongside)
+ThirdParty/      TinySoundFont (MIT), which plays the SoundFont
 Tests/           unit tests and the VST3 host test
 Tools/           command-line generator, UI snapshot tool, evaluators, and corpus/ (the learning script)
 ```
@@ -204,6 +254,9 @@ Tools/           command-line generator, UI snapshot tool, evaluators, and corpu
 ## Credits and data
 
 - **Corpus statistics** (`Source/Core/LearnedData.cpp`) were learned by `Tools/corpus/learn_from_midicaps.py` from the [MidiCaps](https://huggingface.co/datasets/amaai-lab/MidiCaps) dataset (Melechovsky, Roy and Herremans, 2024, CC BY-SA 4.0), which annotates the [Lakh MIDI Dataset](https://colinraffel.com/projects/lmd/) (Colin Raffel, 2016, CC BY 4.0). Only aggregate counts are stored (interval transitions of lead lines, bar rhythm patterns, four-chord progressions per style family), never a melody or a piece. That file is licensed CC BY-SA 4.0. To regenerate it, download `train.json` and `midicaps.tar.gz` from the dataset page and run the script.
+- **Originality index** (`Source/Core/OriginalityData.cpp`): a Bloom filter of melodic fingerprints of the same corpus, built by `Tools/corpus/build_originality_index.py`. It stores hashed bits only, no melody, and is licensed CC BY-SA 4.0 like the statistics.
+- **GeneralUser GS** SoundFont (the preview's instruments) by S. Christian Collins, [licence](Resources/SoundFont/GeneralUser-GS-LICENSE.txt): free to use in music and in software, with the author's note on sample origins.
+- **TinySoundFont** by Bernhard Schelling (based on SFZero by Steve Folta), [MIT licence](ThirdParty/TinySoundFont/LICENSE).
 - **Inter** typeface by The Inter Project Authors, [SIL Open Font License 1.1](Resources/Fonts/Inter-OFL.txt).
 
 ## License note

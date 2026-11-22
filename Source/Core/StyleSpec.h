@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MusicTheory.h"
+#include "Request.h"
 
 #include <string>
 #include <vector>
@@ -103,6 +104,7 @@ struct StyleSpec
     std::vector<TrackSpec> tracks;
 
     std::vector<std::string> interpretation; // human-readable notes on how the prompt was read
+    Request request;                         // what the prompt asked for: every take is checked against it
 };
 
 /** Clamps every field into a range the composer can handle and assigns MIDI channels. */

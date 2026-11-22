@@ -4,6 +4,8 @@
 #include "MidiFileWriter.h"
 #include "PromptInterpreter.h"
 #include "QualityCheck.h"
+#include "RequestCheck.h"
+#include "Originality.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1067,6 +1069,295 @@ static void testCustomInstruments()
     }
 }
 
+static void testRequests()
+{
+    std::printf ("requests: the piece is what was asked for\n");
+
+    auto playing = [] (const Composition& c)
+    {
+        std::vector<const Track*> out;
+
+        for (auto& t : c.tracks)
+            if (! t.notes.empty())
+                out.push_back (&t);
+
+        return out;
+    };
+
+    auto onlyPrograms = [&] (const Composition& c, std::initializer_list<std::pair<int, int>> ranges, bool drumsAllowed)
+    {
+        for (auto* t : playing (c))
+        {
+            if (t->isDrum)
+            {
+                if (! drumsAllowed)
+                    return false;
+
+                continue;
+            }
+
+            bool ok = false;
+
+            for (auto& r : ranges)
+                ok = ok || (t->program >= r.first && t->program <= r.second);
+
+            if (! ok)
+                return false;
+        }
+
+        return true;
+    };
+
+    auto players = [&] (const Composition& c)
+    {
+        std::set<std::string> keys;
+
+        for (auto* t : playing (c))
+            keys.insert (instrumentKey (t->name, t->program, t->isDrum));
+
+        return (int) keys.size();
+    };
+
+    auto hasProgram = [&] (const Composition& c, int lo, int hi)
+    {
+        for (auto* t : playing (c))
+            if (! t->isDrum && t->program >= lo && t->program <= hi)
+                return true;
+
+        return false;
+    };
+
+    // Every one of these meets all its criteria, with several seeds.
+    const char* prompts[] = {
+        "Make me a soft piano midi", "a piano piece", "solo violin piece", "Sad piano ballad in D minor", "cello and piano duet",
+        "flute melody only", "string quartet in G major", "fast techno track at 140 bpm", "orchestral piece without percussion",
+        "30 second piano jingle", "waltz for piano", "jazz piano trio", "happy ukulele song", "dark ambient pad, no drums",
+        "a short harp lullaby", "epic choir and organ", "rock song with no guitar", "slow sad cello solo",
+        "Late night jazz combo with a tenor sax lead", "Lo-fi hip hop beat with a mellow electric piano, rainy night",
+        "Peaceful orchestral village theme with woodwinds and harp", "16 bars of funky bass and drums", "string trio",
+        "woodwind quintet", "trumpet and piano duet in Bb major", "a 45 second marimba loop", "just drums",
+        "2 minute orchestral adventure theme in E minor", "calm acoustic guitar in 6/8", "Gentle lullaby for music box and harp",
+    };
+
+    for (auto* p : prompts)
+    {
+        for (uint64_t seed : { 3ull, 29ull })
+        {
+            const auto spec = interpretPrompt (p, seed);
+            const auto c = compose (spec, seed);
+            CHECK (c.request.total() > 0);
+
+            if (! c.request.allMet())
+            {
+                std::printf ("  \"%s\" (seed %d) misses:", p, (int) seed);
+
+                for (auto& cr : c.request.criteria)
+                    if (! cr.met)
+                        std::printf (" [%s: %s]", cr.label.c_str(), cr.detail.c_str());
+
+                std::printf ("\n");
+            }
+
+            CHECK (c.request.allMet());
+        }
+    }
+
+    // ...and the notes really are what was asked for.
+    {
+        const auto c = compose (interpretPrompt ("waltz for piano", 5), 5);
+        CHECK (onlyPrograms (c, { { 0, 7 } }, false));
+        CHECK_EQ (c.tsNum, 3);
+    }
+    {
+        const auto c = compose (interpretPrompt ("jazz piano trio", 5), 5);
+        CHECK_EQ (players (c), 3);
+        CHECK (! hasProgram (c, 64, 67));        // no sax
+        CHECK (hasProgram (c, 0, 7));
+    }
+    {
+        const auto c = compose (interpretPrompt ("happy ukulele song", 5), 5);
+        bool ukulele = false;
+
+        for (auto* t : playing (c))
+            ukulele = ukulele || t->name.find ("Ukulele") != std::string::npos;
+
+        CHECK (ukulele);
+        CHECK_EQ (players (c), 1);
+    }
+    {
+        const auto c = compose (interpretPrompt ("orchestral piece without percussion", 5), 5);
+        CHECK (onlyPrograms (c, { { 0, 8 }, { 10, 10 }, { 15, 46 }, { 48, 111 } }, false));   // no drums, timpani or mallets
+        CHECK (c.title.find ("Percussion") == std::string::npos);
+    }
+    {
+        const auto c = compose (interpretPrompt ("rock song with no guitar", 5), 5);
+        CHECK (! hasProgram (c, 24, 31));
+        CHECK (c.title.find ("Guitar") == std::string::npos);
+    }
+    {
+        const auto c = compose (interpretPrompt ("epic choir and organ", 5), 5);
+        CHECK (onlyPrograms (c, { { 16, 20 }, { 52, 54 } }, false));
+    }
+    {
+        const auto c = compose (interpretPrompt ("30 second piano jingle", 5), 5);
+        CHECK (std::abs (c.seconds() - 30.0) <= 3.6);
+    }
+    {
+        const auto c = compose (interpretPrompt ("Sad piano ballad in D minor", 5), 5);
+        CHECK_EQ (c.keyRoot, 2);
+        CHECK (c.mode == Mode::Minor || c.mode == Mode::HarmonicMinor || c.mode == Mode::MelodicMinor);
+    }
+    {
+        const auto c = compose (interpretPrompt ("Late night jazz combo with a tenor sax lead", 5), 5);
+        bool saxLeads = false;
+
+        for (auto* t : playing (c))
+            saxLeads = saxLeads || (t->program == 66 && t->role == Role::Melody);
+
+        CHECK (saxLeads);
+    }
+    {
+        const auto c = compose (interpretPrompt ("16 bars of funky bass and drums", 5), 5);
+        CHECK (onlyPrograms (c, { { 32, 39 } }, true));
+        CHECK_EQ (c.bars, 16);
+    }
+    {
+        const auto c = compose (interpretPrompt ("string trio", 5), 5);
+        CHECK_EQ (players (c), 3);
+        CHECK (onlyPrograms (c, { { 40, 51 } }, false));
+    }
+
+    // Instruments that join a style rather than replace it.
+    {
+        const auto spec = interpretPrompt ("Lo-fi hip hop beat with a mellow electric piano, rainy night", 5);
+        CHECK (! spec.request.onlyThese);
+        CHECK (spec.tracks.size() >= 3);
+        const auto heroic = interpretPrompt ("Heroic main theme for an adventure game, triumphant brass and strings", 5);
+        CHECK (! heroic.request.onlyThese);
+        CHECK (heroic.tracks.size() >= 10);
+    }
+
+    // The check catches a piece that isn't what was asked for.
+    {
+        const auto spec = interpretPrompt ("a piano piece", 5);
+        auto c = compose (spec, 5);
+        Track drums;
+        drums.name = "Drums";
+        drums.isDrum = true;
+        drums.channel = 9;
+
+        for (int i = 0; i < 16; ++i)
+            drums.notes.push_back ({ i * 480, 120, 36, 100 });
+
+        c.tracks.push_back (drums);
+        const auto report = checkRequest (c, spec.request);
+        CHECK (! report.allMet());
+        CHECK (report.criteria.front().label == "Only piano" && ! report.criteria.front().met);
+
+        c.tempo = 200;
+        Request fast = spec.request;
+        fast.tempo = 90;
+        CHECK (! checkRequest (c, fast).allMet());
+    }
+
+    // Your own instruments are the request.
+    {
+        PromptOverrides o;
+        InstrumentChoice flute;
+        flute.name = "Flute";
+        flute.program = 73;
+        o.instruments = { flute };
+        const auto spec = interpretPrompt ("epic orchestral battle", 5, o);
+        CHECK (spec.request.onlyThese);
+        CHECK_EQ ((int) spec.request.instruments.size(), 1);
+        CHECK (compose (spec, 5).request.allMet());
+    }
+
+    // The controls are criteria too.
+    {
+        PromptOverrides o;
+        o.keyRoot = 9;
+        o.tempo = 133;
+        const auto c = compose (interpretPrompt ("happy pop song", 5, o), 5);
+        CHECK_EQ (c.keyRoot, 9);
+        CHECK_EQ (c.tempo, 133);
+        CHECK (c.request.allMet());
+    }
+}
+
+static void testOriginality()
+{
+    std::printf ("originality: new tunes, never the corpus's\n");
+
+    // The fingerprints match the corpus tool's (Tools/corpus/build_originality_index.py).
+    {
+        std::vector<Note> line;
+        const int pitches[] = { 60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79 };
+
+        for (int i = 0; i < 12; ++i)
+            line.push_back ({ (i * 2 + i / 4) * 120, 200, pitches[i], 90 });
+
+        const auto moves = melodyMoves (line);
+        CHECK_EQ ((int) moves.size(), 1);
+        CHECK (moves[0] == std::vector<int> ({ 113, 113, 105, 114, 113, 113, 105, 114, 113, 105, 113 }));
+        CHECK_EQ (movesHash (moves[0].data(), 10), 0x2dfed88097c880eaull);
+        CHECK_EQ (movesHash (moves[0].data() + 1, 10), 0xc60f8ba859a02095ull);
+    }
+
+    // Copying is caught: index one piece's melodies, then check it (transposed) and another piece.
+    {
+        const auto a = compose (interpretPrompt ("Generate me a fantasy orchestral midi", 3), 3);
+        const auto b = compose (interpretPrompt ("Generate me a fantasy orchestral midi", 4), 4);
+        std::set<uint64_t> index;
+
+        for (auto& t : a.tracks)
+            if (! t.isDrum && (t.role == Role::Melody || t.role == Role::CounterMelody))
+                for (auto& phrase : melodyMoves (t.notes))
+                    for (int i = 0; i + 10 <= (int) phrase.size(); i += 3)   // a thinned index, like the winnowed one
+                        index.insert (movesHash (phrase.data() + i, 10));
+
+        auto has = [] (uint64_t h, const void* ctx) { return static_cast<const std::set<uint64_t>*> (ctx)->count (h) > 0; };
+        auto copy = a;
+
+        for (auto& t : copy.tracks)
+            for (auto& n : t.notes)
+                n.pitch += 3;   // another key
+
+        const auto caught = checkOriginality (copy, has, &index);
+        CHECK (! caught.original);
+        CHECK (caught.longestPassage >= 16);
+        CHECK (checkOriginality (b, has, &index).original);
+
+        // Takes: a piece shares everything with itself, little with another take.
+        CHECK (melodicOverlap (a, a) > 0.99);
+        CHECK (melodicOverlap (a, b) < 0.5);
+    }
+
+    // Against the real corpus index: every generation is original.
+    if (corpusSize() > 0)
+    {
+        const char* prompts[] = { "Generate me a fantasy orchestral midi", "Make me a soft piano midi", "Lo-fi hip hop beat",
+                                  "Late night jazz combo with a tenor sax lead", "80s synthwave night drive", "celtic tavern jig",
+                                  "Epic orchestral battle music for a boss fight", "sad piano ballad", "happy pop song", "country song" };
+        int checked = 0;
+
+        for (auto* p : prompts)
+            for (uint64_t seed : { 1ull, 2ull, 3ull, 4ull })
+            {
+                const auto c = compose (interpretPrompt (p, seed), seed);
+                const auto o = checkOriginality (c);
+
+                if (! o.original)
+                    std::printf ("  \"%s\" seed %d: %d notes of %s match the corpus\n", p, (int) seed, o.longestPassage, o.track.c_str());
+
+                CHECK (o.original);
+                ++checked;
+            }
+
+        CHECK_EQ (checked, 40);
+    }
+}
+
 int main()
 {
     testChordParsing();
@@ -1082,6 +1373,8 @@ int main()
     testLearnedModels();
     testVariationsDiffer();
     testCustomInstruments();
+    testRequests();
+    testOriginality();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

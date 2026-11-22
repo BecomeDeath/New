@@ -29,10 +29,14 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override;
     void mouseUp (const juce::MouseEvent&) override { dragging = false; }
 
+    /** True while PromptMIDI itself is dragging a file out (so it doesn't import its own drop). */
+    static bool isDraggingOut()                    { return draggingOut; }
+
 protected:
     PromptMidiProcessor& processor;
     int track = -1;
     bool dragging = false;
+    static inline bool draggingOut = false;
 };
 
 /** The arrangement: track headers beside one lane per track, under a ruler with bars, sections,

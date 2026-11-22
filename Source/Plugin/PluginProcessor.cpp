@@ -3,6 +3,9 @@
 #include "Composer.h"
 #include "MidiFileWriter.h"
 #include "QualityCheck.h"
+#include "PresetIO.h"
+#include "RequestCheck.h"
+#include "Originality.h"
 #include "SpecJson.h"
 
 namespace
@@ -35,7 +38,8 @@ PromptMidiProcessor::PromptMidiProcessor()
     generatedMidi.ensureSize (8192);
     panicMidi.ensureSize (4096);
     statusMessage = "Describe the music you want, then press Generate.";
-    startTimer (500);
+    synth.setSource (settings->getPreviewSound());   // the instruments load in the background
+    startTimer (250);
 }
 
 PromptMidiProcessor::~PromptMidiProcessor()
@@ -131,6 +135,7 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     juce::ScopedNoDenormals noDenormals;
     lastBlockMs.store (juce::Time::getMillisecondCounter());
     bypassedByHost.store (false);
+    synth.beginBlock();
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
     generatedMidi.clear();
@@ -569,6 +574,11 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
 
             auto s = baseSpec;
             applyControls (s, true);
+
+            // Claude's plan is held to the same request as the offline one: what the prompt and
+            // the controls ask for (instruments, key, tempo, length...) is enforced, then checked.
+            s.request = pm::parseRequest (requestPrompt.toStdString(), promptOverrides());
+            pm::applyRequest (s, s.request);
             mutedMask.store (0);
             applySpec (s, newSeed);
             setStatus (Status::Idle, "Composed with Claude. Press Variation for another take with the same plan.");
@@ -589,8 +599,17 @@ void PromptMidiProcessor::makeVariation()
     // Same key, tempo, length and instruments; new harmony (unless Claude planned it), new
     // accompaniment figures, and - from the new seed - a new theme, form and orchestration.
     startNewTake ("Variation");
-    variationSeed = randomSeed();
-    applySpec (pm::varySpec (spec, variationSeed, lastEngine == Engine::Claude), variationSeed);
+    const auto base = spec;
+
+    // A variation is new music: if it shares much of its melody with an earlier take, try again.
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        variationSeed = randomSeed();
+        applySpec (pm::varySpec (base, variationSeed, lastEngine == Engine::Claude), variationSeed);
+
+        if (overlapWithOtherTakes() < maxTakeOverlap)
+            break;
+    }
     setStatus (Status::Idle, "New variation: same key, tempo and instruments, new music. The previous take is one click back.");
 }
 
@@ -598,6 +617,13 @@ void PromptMidiProcessor::controlsChanged()
 {
     if (claudeJob != nullptr || spec.tracks.empty())
         return;
+
+    if (isImportedPiece())
+    {
+        setStatus (Status::Idle, "An imported MIDI file keeps its notes. Press Variation for new music for its instruments, "
+                                 "or Generate for your prompt.");
+        return;
+    }
 
     // Re-composing replaces the take on screen - unless it has edits, which are kept as their own take.
     const bool keepEdits = isEdited();
@@ -622,6 +648,9 @@ void PromptMidiProcessor::controlsChanged()
     // Claude's harmony was written for its scale, so a new scale needs a new plan.
     auto s = baseSpec;
     applyControls (s, false);
+    auto request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
+    request.mode = -1;   // (the plan keeps Claude's scale until Generate asks for a new plan; the check still reports it)
+    pm::applyRequest (s, request);
     applySpec (s, seed);
 
     const bool modeDiffers = controls.mode >= 0 && (pm::Mode) controls.mode != baseSpec.mode;
@@ -650,13 +679,37 @@ void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newS
 
     spec = newSpec;
     seed = newSeed;
+
+    // Every take is checked against what the prompt and the controls ask for.
+    if (lastPrompt.isNotEmpty())
+        spec.request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
+
     composition = pm::compose (spec, seed);
+
+    if (takes.size() > 1)
+    {
+        const double overlap = overlapWithOtherTakes();
+        composition.request.criteria.push_back ({ "Different from your other takes", overlap < maxTakeOverlap,
+                                                  juce::String (juce::roundToInt (overlap * 100.0)).toStdString() + "% of its melody repeats an earlier take" });
+    }
+
     ++pieceVersion;
     undoManager.clearUndoHistory();
     edited = false;
     cursorTick = juce::jlimit (0.0, (double) juce::jmax (0, composition.lengthTicks - 1), cursorTick);
     storeTake();
     publishPlayback();
+}
+
+double PromptMidiProcessor::overlapWithOtherTakes() const
+{
+    double most = 0.0;
+
+    for (int i = 0; i < (int) takes.size(); ++i)
+        if (i != currentTake && takes[(size_t) i].composition.noteCount() > 0)
+            most = juce::jmax (most, pm::melodicOverlap (composition, takes[(size_t) i].composition));
+
+    return most;
 }
 
 void PromptMidiProcessor::storeTake()
@@ -827,6 +880,15 @@ void PromptMidiProcessor::publishPlayback()
 
         if (! t.isDrum)
             data->programs[ch] = t.program;
+        else if (ch == 9)
+        {
+            // Orchestral percussion plays on the SoundFont's orchestra kit (bank 128, preset 48).
+            const auto name = juce::String (t.name).toLowerCase();
+
+            for (auto* word : { "bass drum", "cymbal", "snare drum", "taiko", "tam-tam", "triangle", "timpani", "gran cassa" })
+                if (name.contains (word))
+                    data->programs[9] = 48;
+        }
 
         for (auto& c : t.controls)
             data->events.push_back ({ c.tick, 1, 3, (int8_t) ti, { (uint8_t) (0xB0 | ch), (uint8_t) c.controller, (uint8_t) c.value } });
@@ -853,8 +915,16 @@ void PromptMidiProcessor::publishPlayback()
     sendChangeMessage();
 }
 
+void PromptMidiProcessor::previewSoundChanged()
+{
+    synth.setSource (settings->getPreviewSound());
+    sendChangeMessage();
+}
+
 void PromptMidiProcessor::timerCallback()
 {
+    synth.refresh();   // a newly loaded SoundFont, or one chosen in another instance's settings
+
     // Free playback data the audio thread no longer references.
     retired.erase (std::remove_if (retired.begin(), retired.end(),
                                    [] (const std::shared_ptr<const PlaybackData>& p) { return p.use_count() == 1; }),
@@ -945,6 +1015,285 @@ juce::File PromptMidiProcessor::writeMidiToTempFile (int trackIndex) const
     auto file = dir.getChildFile (suggestedFileName (trackIndex));
     writeMidiFile (file, trackIndex);
     return file;
+}
+
+//==============================================================================
+namespace
+{
+    juce::var instrumentsToVar (const std::vector<pm::InstrumentChoice>& list)
+    {
+        juce::Array<juce::var> out;
+
+        for (auto& c : list)
+        {
+            juce::DynamicObject::Ptr o = new juce::DynamicObject();
+            o->setProperty ("name", juce::String (c.name));
+            o->setProperty ("program", c.program);
+            o->setProperty ("role", juce::String (c.role));
+            out.add (juce::var (o.get()));
+        }
+
+        return out;
+    }
+
+    std::vector<pm::InstrumentChoice> instrumentsFromVar (const juce::var& v)
+    {
+        std::vector<pm::InstrumentChoice> out;
+
+        if (auto* list = v.getArray())
+        {
+            for (auto& item : *list)
+            {
+                pm::InstrumentChoice c;
+                c.name = item["name"].toString().toStdString();
+                c.program = juce::jlimit (-1, 127, (int) item["program"]);
+                c.role = item["role"].toString().isEmpty() ? std::string ("auto") : item["role"].toString().toStdString();
+
+                if (! c.name.empty() && out.size() < 24)
+                    out.push_back (c);
+            }
+        }
+
+        return out;
+    }
+
+    /** A plan for composing new music like an imported piece: its tempo, meter, key and instruments. */
+    pm::StyleSpec specLike (const pm::Composition& c)
+    {
+        pm::StyleSpec s;
+        s.title = c.title;
+        s.styleId = "imported";
+        s.tempo = c.tempo;
+        s.tsNum = c.tsNum;
+        s.tsDen = c.tsDen;
+        s.bars = juce::jlimit (4, 128, c.bars);
+        s.keyRoot = c.keyRoot;
+        s.mode = c.mode;
+        s.progression = c.mode == pm::Mode::Minor ? std::vector<std::string> { "i", "VI", "III", "VII" }
+                                                  : std::vector<std::string> { "I", "V", "vi", "IV" };
+        s.length = "bars";
+
+        for (auto& t : c.tracks)
+        {
+            if (t.notes.empty() || t.splitFrom >= 0)
+                continue;
+
+            pm::TrackSpec ts;
+            ts.name = t.name;
+            ts.role = t.role;
+            ts.program = t.program;
+            ts.channel = t.channel;
+            int lo = 127, hi = 0, vel = 0;
+
+            for (auto& n : t.notes)
+            {
+                lo = juce::jmin (lo, n.pitch);
+                hi = juce::jmax (hi, n.pitch);
+                vel += n.velocity;
+            }
+
+            ts.lowNote = t.isDrum ? 35 : lo;
+            ts.highNote = t.isDrum ? 81 : juce::jmax (lo + 12, hi);
+            ts.velocity = juce::jlimit (30, 120, vel / (int) t.notes.size());
+            ts.density = juce::jlimit (0.15, 0.85, (double) t.notes.size() / juce::jmax (1, c.bars) / 8.0);
+            s.tracks.push_back (ts);
+        }
+
+        pm::normalizeSpec (s);
+        return s;
+    }
+}
+
+bool PromptMidiProcessor::isImportedPiece() const
+{
+    return currentTake >= 0 && currentTake < (int) takes.size() && takes[(size_t) currentTake].kind == "Imported";
+}
+
+juce::var PromptMidiProcessor::presetToVar (const juce::String& name) const
+{
+    juce::DynamicObject::Ptr o = new juce::DynamicObject();
+    o->setProperty ("format", "PromptMIDI preset");
+    o->setProperty ("version", 1);
+    o->setProperty ("name", name);
+    o->setProperty ("prompt", prompt);
+    o->setProperty ("engine", engine == Engine::Claude ? "claude" : "offline");
+    o->setProperty ("seed", juce::String ((juce::int64) seed));
+    o->setProperty ("seedLocked", seedLocked);
+
+    juce::DynamicObject::Ptr c = new juce::DynamicObject();
+    c->setProperty ("key", controls.keyRoot);
+    c->setProperty ("mode", controls.mode);
+    c->setProperty ("tempo", controls.tempo);
+    c->setProperty ("bars", controls.bars);
+    c->setProperty ("length", controls.length);
+    c->setProperty ("instruments", instrumentsToVar (controls.instruments));
+    o->setProperty ("controls", juce::var (c.get()));
+
+    if (hasComposition())
+    {
+        // The piece itself, with its edits, so loading the preset brings it back exactly.
+        juce::DynamicObject::Ptr p = new juce::DynamicObject();
+        p->setProperty ("lastPrompt", lastPrompt);
+        p->setProperty ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
+        p->setProperty ("interpretSeed", juce::String ((juce::int64) interpretSeed));
+        p->setProperty ("variationSeed", juce::String ((juce::int64) variationSeed));
+        p->setProperty ("muted", juce::String ((juce::int64) mutedMask.load()));
+        p->setProperty ("edited", isEdited());
+        p->setProperty ("imported", isImportedPiece());
+        p->setProperty ("spec", SpecJson::specToVar (spec));
+        p->setProperty ("baseSpec", SpecJson::specToVar (baseSpec));
+        p->setProperty ("composition", SpecJson::compositionToVar (composition));
+        o->setProperty ("piece", juce::var (p.get()));
+    }
+
+    return juce::var (o.get());
+}
+
+bool PromptMidiProcessor::presetFromVar (const juce::var& v, juce::String& error)
+{
+    if (! v.isObject() || v["format"].toString() != "PromptMIDI preset")
+    {
+        error = "This isn't a PromptMIDI preset.";
+        return false;
+    }
+
+    if (claudeJob != nullptr)
+    {
+        error = "Wait for the current generation to finish (or cancel it) first.";
+        return false;
+    }
+
+    const auto& c = v["controls"];
+    pm::StyleSpec restoredSpec, restoredBase;
+    pm::Composition restored;
+    juce::String specError;
+    const auto& piece = v["piece"];
+    const bool havePiece = piece.isObject()
+                        && SpecJson::compositionFromVar (piece["composition"], restored) && restored.noteCount() > 0
+                        && SpecJson::specFromVar (piece["spec"], restoredSpec, specError);
+
+    prompt = v["prompt"].toString();
+    engine = v["engine"].toString() == "claude" ? Engine::Claude : Engine::Offline;
+    seedLocked = (bool) v["seedLocked"];
+    seed = (uint64_t) juce::jmax ((juce::int64) 1, v["seed"].toString().getLargeIntValue());
+    controls.keyRoot = juce::jlimit (-1, 11, c.getProperty ("key", -1).operator int());
+    controls.mode = juce::jlimit (-1, (int) pm::Mode::Japanese, c.getProperty ("mode", -1).operator int());
+    controls.tempo = juce::jlimit (0, 300, c.getProperty ("tempo", 0).operator int());
+    controls.bars = juce::jlimit (0, 160, c.getProperty ("bars", 0).operator int());
+    controls.length = c.getProperty ("length", juce::String()).toString();
+    controls.instruments = instrumentsFromVar (c["instruments"]);
+
+    if (! havePiece)
+    {
+        // A prompt and settings: composed fresh.
+        if (prompt.trim().isEmpty())
+        {
+            error = "The preset has no prompt and no piece.";
+            sendChangeMessage();
+            return false;
+        }
+
+        generate (prompt);
+        return true;
+    }
+
+    startNewTake (piece["imported"] ? "Imported" : "Preset");
+    spec = restoredSpec;
+    baseSpec = SpecJson::specFromVar (piece["baseSpec"], restoredBase, specError) ? restoredBase : restoredSpec;
+    composition = restored;
+    lastPrompt = piece["lastPrompt"].toString();
+    lastEngine = piece["lastEngine"].toString() == "claude" ? Engine::Claude : Engine::Offline;
+    interpretSeed = (uint64_t) piece["interpretSeed"].toString().getLargeIntValue();
+    variationSeed = (uint64_t) piece["variationSeed"].toString().getLargeIntValue();
+    mutedMask.store ((uint64_t) piece["muted"].toString().getLargeIntValue());
+    undoManager.clearUndoHistory();
+    edited = (bool) piece["edited"];
+    ++pieceVersion;
+    cursorTick = 0.0;
+    storeTake();
+    setStatus (Status::Idle, "Loaded the preset \"" + v["name"].toString() + "\".");
+    publishPlayback();
+    return true;
+}
+
+bool PromptMidiProcessor::savePreset (const juce::File& file, const juce::String& name) const
+{
+    file.getParentDirectory().createDirectory();
+    return file.replaceWithText (juce::JSON::toString (presetToVar (name), false));
+}
+
+bool PromptMidiProcessor::loadPreset (const juce::File& file, juce::String& error)
+{
+    if (file.getSize() > 64 * 1024 * 1024)
+    {
+        error = file.getFileName() + " is too large to be a preset.";
+        return false;
+    }
+
+    const auto v = juce::JSON::parse (file);
+
+    if (! v.isObject())
+    {
+        error = file.getFileName() + " isn't a PromptMIDI preset.";
+        return false;
+    }
+
+    return presetFromVar (v, error);
+}
+
+void PromptMidiProcessor::loadFactoryPreset (int index)
+{
+    const auto& list = PresetIO::factoryPresets();
+
+    if (index < 0 || index >= (int) list.size() || claudeJob != nullptr)
+        return;
+
+    const auto& f = list[(size_t) index];
+    controls = Controls();
+    controls.length = f.length;
+    seedLocked = false;
+    engine = Engine::Offline;
+    generate (f.prompt);
+}
+
+bool PromptMidiProcessor::importMidi (const juce::File& file, juce::String& error)
+{
+    if (claudeJob != nullptr)
+    {
+        error = "Wait for the current generation to finish (or cancel it) first.";
+        return false;
+    }
+
+    pm::Composition imported;
+
+    if (! PresetIO::readMidiFile (file, imported, error))
+        return false;
+
+    startNewTake ("Imported");
+    spec = specLike (imported);
+    baseSpec = spec;
+    composition = imported;
+    lastPrompt = {};
+    lastEngine = Engine::Offline;
+    variationSeed = 0;
+    interpretSeed = seed;
+    mutedMask.store (0);
+    undoManager.clearUndoHistory();
+    edited = false;
+    ++pieceVersion;
+    cursorTick = 0.0;
+    storeTake();
+
+    int playing = 0;
+
+    for (auto& t : composition.tracks)
+        playing += t.notes.empty() ? 0 : 1;
+
+    setStatus (Status::Idle, "Imported " + file.getFileName() + ": " + juce::String (playing) + " tracks, "
+                                 + juce::String (composition.bars) + " bars. Play, edit and drag it out - or press Variation "
+                                 "for new music for the same instruments.");
+    publishPlayback();
+    return true;
 }
 
 //==============================================================================
