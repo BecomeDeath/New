@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "Composer.h"
 #include "MidiFileWriter.h"
+#include "QualityCheck.h"
 #include "SpecJson.h"
 
 namespace
@@ -290,6 +291,37 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
             if (! followHost)
                 previewPlaying.store (false); // the one-shot preview reached the end
+        }
+    }
+
+    // A note clicked in the editor: heard through the preview sound only, never with the host.
+    if (const int req = auditionRequest.exchange (-1); req >= 0 && ! hostPlaying && previewSoundParam->load() > 0.5f)
+    {
+        if (auditionChannel >= 0)
+            synth.handle (juce::MidiMessage::noteOff (auditionChannel + 1, auditionPitch));
+
+        auditionChannel = (req >> 16) & 0x0F;
+        auditionPitch = req & 0x7F;
+        synth.setProgram (auditionChannel, (req >> 8) & 0x7F);
+        synth.handle (juce::MidiMessage::noteOn (auditionChannel + 1, auditionPitch, (juce::uint8) juce::jlimit (1, 127, auditionVelocity.load())));
+        auditionSamplesLeft = (int) (currentSampleRate * 0.35);
+        synthHadSound = true;
+        silentBlocks = 0;
+    }
+
+    if (auditionChannel >= 0)
+    {
+        auditionSamplesLeft -= numSamples;
+
+        if (auditionSamplesLeft <= 0)
+        {
+            synth.handle (juce::MidiMessage::noteOff (auditionChannel + 1, auditionPitch));
+
+            // Restore the composition's program on that channel.
+            if (data != nullptr)
+                synth.setProgram (auditionChannel, data->programs[(size_t) auditionChannel]);
+
+            auditionChannel = -1;
         }
     }
 
@@ -588,7 +620,83 @@ void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newS
     spec = newSpec;
     seed = newSeed;
     composition = pm::compose (spec, seed);
+    ++pieceVersion;
+    undoManager.clearUndoHistory();
+    edited = false;
+    cursorTick = juce::jlimit (0.0, (double) juce::jmax (0, composition.lengthTicks - 1), cursorTick);
     publishPlayback();
+}
+
+//==============================================================================
+struct NoteEditAction : public juce::UndoableAction
+{
+    NoteEditAction (PromptMidiProcessor& p, int t, std::vector<pm::Note> b, std::vector<pm::Note> a)
+        : processor (p), track (t), before (std::move (b)), after (std::move (a)) {}
+
+    bool perform() override  { processor.setTrackNotes (track, after); return true; }
+    bool undo() override     { processor.setTrackNotes (track, before); return true; }
+    int getSizeInUnits() override { return (int) (before.size() + after.size()) + 1; }
+
+    PromptMidiProcessor& processor;
+    int track;
+    std::vector<pm::Note> before, after;
+};
+
+void PromptMidiProcessor::setTrackNotes (int trackIndex, const std::vector<pm::Note>& notes)
+{
+    if (trackIndex < 0 || trackIndex >= (int) composition.tracks.size())
+        return;
+
+    auto& t = composition.tracks[(size_t) trackIndex];
+    t.notes = notes;
+    std::stable_sort (t.notes.begin(), t.notes.end(), [] (const pm::Note& a, const pm::Note& b) { return a.start < b.start; });
+
+    // Keep the piece long enough for notes drawn past the end.
+    for (auto& n : t.notes)
+        composition.lengthTicks = juce::jmax (composition.lengthTicks, n.start + n.length);
+
+    composition.bars = (composition.lengthTicks + composition.ticksPerBar - 1) / juce::jmax (1, composition.ticksPerBar);
+    composition.quality = pm::checkQuality (composition);
+    edited = true;
+    publishPlayback();
+}
+
+void PromptMidiProcessor::editTrackNotes (int trackIndex, std::vector<pm::Note> notes, const juce::String& actionName)
+{
+    if (trackIndex < 0 || trackIndex >= (int) composition.tracks.size())
+        return;
+
+    // Notes stay valid: in range, at least a tick long, inside the MIDI pitch range.
+    for (auto& n : notes)
+    {
+        n.start = juce::jmax (0, n.start);
+        n.length = juce::jmax (10, n.length);
+        n.pitch = juce::jlimit (0, 127, n.pitch);
+        n.velocity = juce::jlimit (1, 127, n.velocity);
+    }
+
+    undoManager.beginNewTransaction (actionName);
+    undoManager.perform (new NoteEditAction (*this, trackIndex, composition.tracks[(size_t) trackIndex].notes, std::move (notes)));
+}
+
+void PromptMidiProcessor::auditionNote (int trackIndex, int pitch, int velocity)
+{
+    if (trackIndex < 0 || trackIndex >= (int) composition.tracks.size())
+        return;
+
+    const auto& t = composition.tracks[(size_t) trackIndex];
+    auditionVelocity.store (velocity);
+    auditionRequest.store ((t.channel & 0x0F) << 16 | (t.isDrum ? 0 : (t.program & 0x7F)) << 8 | (pitch & 0x7F));
+}
+
+void PromptMidiProcessor::setCursorTick (double tick)
+{
+    cursorTick = juce::jlimit (0.0, (double) juce::jmax (0, composition.lengthTicks), tick);
+
+    if (previewPlaying.load())
+        setPreviewPlaying (true, cursorTick);
+
+    sendChangeMessage();
 }
 
 void PromptMidiProcessor::publishPlayback()
@@ -839,6 +947,8 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         if (haveComp && restored.noteCount() > 0)
         {
             composition = restored;
+            ++pieceVersion;
+            undoManager.clearUndoHistory();
             publishPlayback();
             mutedMask.store ((uint64_t) xml->getStringAttribute ("muted", "0").getLargeIntValue());
             statusMessage = "Restored from the project.";

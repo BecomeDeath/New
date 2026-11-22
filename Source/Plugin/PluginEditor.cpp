@@ -5,7 +5,7 @@ namespace
 {
     juce::Font font (float size, bool bold = false)
     {
-        return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
+        return Theme::font (size, bold ? Theme::Weight::SemiBold : Theme::Weight::Regular);
     }
 
     juce::String fromStd (const std::string& s) { return juce::String::fromUTF8 (s.c_str()); }
@@ -15,220 +15,66 @@ namespace
         l.setFont (font (size, bold));
         l.setColour (juce::Label::textColourId, colour);
         l.setJustificationType (juce::Justification::centredLeft);
-        l.setMinimumHorizontalScale (0.8f);
+        l.setMinimumHorizontalScale (0.85f);
     }
 
     struct ExamplePrompt { const char* label; const char* prompt; };
 
     const ExamplePrompt examples[] = {
         { "Fantasy orchestral", "Generate me a fantasy orchestral midi" },
+        { "Boss battle",        "Epic orchestral battle music for a boss fight" },
         { "Soft piano",         "Make me a soft piano midi" },
         { "Lo-fi hip hop",      "Lo-fi hip hop beat with a mellow electric piano, rainy night" },
-        { "Epic trailer",       "Epic cinematic trailer music with choir, brass and big drums" },
+        { "Villain theme",      "Dark fantasy orchestral theme for a villain's castle" },
+        { "Village",            "Peaceful orchestral village theme with woodwinds and harp" },
         { "Jazz combo",         "Late night jazz combo with a tenor sax lead" },
         { "Synthwave",          "80s synthwave night drive with arpeggios" },
         { "Celtic tavern",      "Lively celtic tavern jig with fiddle and whistle" },
-        { "Dark horror",        "Creepy horror music box with tense strings" },
-        { "Deep house",         "Deep house groove at 124 bpm" },
         { "Lullaby",            "Gentle lullaby for music box and harp" },
     };
+
+    juce::String timeText (double tick, const pm::Composition& c)
+    {
+        if (tick < 0.0 || c.tempo <= 0)
+            tick = 0.0;
+
+        const double seconds = tick / pm::kPpq * 60.0 / c.tempo;
+        const int tpb = juce::jmax (1, c.ticksPerBar);
+        const int beatTicks = c.tsDen == 8 ? pm::kPpq * 3 / 2 : pm::kPpq;
+        const int bar = (int) (tick / tpb) + 1;
+        const int beat = (int) (std::fmod (tick, (double) tpb) / beatTicks) + 1;
+        const int s = (int) seconds;
+        return juce::String (bar) + "." + juce::String (beat) + "   " + juce::String (s / 60) + ":" + juce::String (s % 60).paddedLeft ('0', 2);
+    }
 }
 
 //==============================================================================
-void MidiDragSource::mouseDrag (const juce::MouseEvent& e)
-{
-    if (dragging || ! processor.hasComposition() || e.getDistanceFromDragStart() < 6)
-        return;
-
-    dragging = true;
-    processor.setPreviewPlaying (false); // the MIDI goes to the DAW; the preview stays here
-    const auto file = processor.writeMidiToTempFile (track);
-
-    juce::Component::SafePointer<MidiDragSource> safe (this);
-    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
-                                                               [safe] { if (safe != nullptr) safe->dragging = false; });
-}
-
 void DragAllArea::paint (juce::Graphics& g)
 {
     const bool enabled = processor.hasComposition();
     const bool hover = isMouseOver (true) && enabled;
-    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
 
-    g.setColour (hover ? Theme::accent.withAlpha (0.18f) : Theme::panelDark);
-    g.fillRoundedRectangle (r, 8.0f);
+    g.setColour (hover ? Theme::accent.withAlpha (0.22f) : Theme::accent.withAlpha (enabled ? 0.12f : 0.04f));
+    g.fillRoundedRectangle (r, 6.0f);
 
     juce::Path border;
-    border.addRoundedRectangle (r, 8.0f);
-    const float dashes[] = { 5.0f, 4.0f };
+    border.addRoundedRectangle (r, 6.0f);
+    const float dashes[] = { 4.0f, 3.0f };
     juce::Path dashed;
-    juce::PathStrokeType (1.2f).createDashedStroke (dashed, border, dashes, 2);
-    g.setColour (enabled ? Theme::accent.withAlpha (hover ? 1.0f : 0.7f) : Theme::outline);
+    juce::PathStrokeType (1.0f).createDashedStroke (dashed, border, dashes, 2);
+    g.setColour (enabled ? Theme::accent.withAlpha (hover ? 1.0f : 0.75f) : Theme::outline);
     g.fillPath (dashed);
 
-    // down-arrow icon
-    auto icon = r.removeFromLeft (r.getHeight()).reduced (r.getHeight() * 0.28f);
-    juce::Path arrow;
-    arrow.startNewSubPath (icon.getCentreX(), icon.getY());
-    arrow.lineTo (icon.getCentreX(), icon.getBottom() - 4.0f);
-    arrow.startNewSubPath (icon.getCentreX() - 6.0f, icon.getBottom() - 10.0f);
-    arrow.lineTo (icon.getCentreX(), icon.getBottom() - 4.0f);
-    arrow.lineTo (icon.getCentreX() + 6.0f, icon.getBottom() - 10.0f);
-    arrow.startNewSubPath (icon.getX(), icon.getBottom());
-    arrow.lineTo (icon.getRight(), icon.getBottom());
+    auto content = r.reduced (12.0f, 0.0f);
+    Icons::draw (g, Icons::Kind::Download, content.removeFromLeft (20.0f).withSizeKeepingCentre (18.0f, 18.0f), enabled ? Theme::accentHot : Theme::textDim);
+    content.removeFromLeft (10.0f);
     g.setColour (enabled ? Theme::text : Theme::textDim);
-    g.strokePath (arrow, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    auto textArea = r.reduced (4.0f, 6.0f);
-    g.setFont (font (14.0f, true));
-    g.drawText ("Drag MIDI into your DAW", textArea.removeFromTop (textArea.getHeight() * 0.55f), juce::Justification::bottomLeft);
+    g.setFont (Theme::font (13.0f, Theme::Weight::SemiBold));
+    g.drawText ("Drag MIDI into your DAW", content.removeFromTop (content.getHeight() * 0.55f), juce::Justification::bottomLeft);
     g.setColour (Theme::textDim);
-    g.setFont (font (11.5f));
-    g.drawText ("all tracks - or drag one track from the list", textArea, juce::Justification::topLeft);
-}
-
-//==============================================================================
-TrackRow::TrackRow (PromptMidiProcessor& p, int index) : MidiDragSource (p, index)
-{
-    muteButton.setClickingTogglesState (true);
-    muteButton.setColour (juce::TextButton::buttonOnColourId, Theme::error.withAlpha (0.8f));
-    muteButton.setTooltip ("Mute this track (muted tracks are left out of playback and of the full export)");
-    muteButton.onClick = [this] { processor.setTrackMuted (track, muteButton.getToggleState()); };
-    addAndMakeVisible (muteButton);
-
-    setTooltip ("Click to highlight. Drag into your DAW to get just this track.");
-    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
-    refresh();
-}
-
-void TrackRow::setSelected (bool s)
-{
-    if (s != selected)
-    {
-        selected = s;
-        repaint();
-    }
-}
-
-void TrackRow::refresh()
-{
-    muteButton.setToggleState (processor.isTrackMuted (track), juce::dontSendNotification);
-    repaint();
-}
-
-void TrackRow::resized()
-{
-    muteButton.setBounds (getWidth() - 34, (getHeight() - 22) / 2, 26, 22);
-}
-
-void TrackRow::mouseDown (const juce::MouseEvent&)
-{
-    if (onSelect)
-        onSelect (track);
-}
-
-void TrackRow::paint (juce::Graphics& g)
-{
-    const auto& comp = processor.getComposition();
-
-    if (track < 0 || track >= (int) comp.tracks.size())
-        return;
-
-    const auto& t = comp.tracks[(size_t) track];
-    const bool muted = processor.isTrackMuted (track);
-    auto r = getLocalBounds().reduced (4, 2);
-
-    g.setColour (selected ? Theme::raised : Theme::panel);
-    g.fillRoundedRectangle (r.toFloat(), 6.0f);
-
-    const auto colour = PianoRoll::trackColour (track);
-    g.setColour (muted ? colour.withAlpha (0.3f) : colour);
-    g.fillRoundedRectangle (r.removeFromLeft (5).toFloat(), 2.5f);
-
-    r.removeFromLeft (8);
-    r.removeFromRight (36);
-
-    g.setColour (muted ? Theme::textDim : Theme::text);
-    g.setFont (font (13.5f, true));
-    g.drawText (fromStd (t.name), r.removeFromTop (r.getHeight() / 2 + 1), juce::Justification::bottomLeft, true);
-
-    const juce::String instrument = t.isDrum ? juce::String ("Drum kit") : juce::String (pm::gmProgramName (t.program));
-    g.setColour (Theme::textDim);
-    g.setFont (font (11.5f));
-    g.drawText (instrument + "  \xc2\xb7  " + pm::roleDisplayName (t.role) + "  \xc2\xb7  ch " + juce::String (t.channel + 1),
-                r, juce::Justification::topLeft, true);
-}
-
-//==============================================================================
-TrackList::TrackList (PromptMidiProcessor& p) : processor (p)
-{
-    viewport.setViewedComponent (&content, false);
-    viewport.setScrollBarsShown (true, false);
-    viewport.setScrollBarThickness (8);
-    addAndMakeVisible (viewport);
-}
-
-void TrackList::rebuild()
-{
-    rows.clear();
-    const auto& comp = processor.getComposition();
-
-    if (selected >= (int) comp.tracks.size())
-        selected = -1;
-
-    for (int i = 0; i < (int) comp.tracks.size(); ++i)
-    {
-        auto* row = rows.add (new TrackRow (processor, i));
-        row->setSelected (i == selected);
-        row->onSelect = [this] (int index)
-        {
-            selected = (selected == index) ? -1 : index;
-
-            for (auto* r : rows)
-                r->setSelected (r->getTrackIndex() == selected);
-
-            if (onSelectionChanged)
-                onSelectionChanged (selected);
-        };
-        content.addAndMakeVisible (row);
-    }
-
-    resized();
-}
-
-void TrackList::refreshMutes()
-{
-    for (auto* r : rows)
-        r->refresh();
-}
-
-void TrackList::paint (juce::Graphics& g)
-{
-    g.setColour (Theme::panel);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
-    g.setColour (Theme::textDim);
-    g.setFont (font (11.0f, true));
-    g.drawText ("TRACKS", getLocalBounds().removeFromTop (24).reduced (10, 0), juce::Justification::centredLeft);
-
-    if (rows.isEmpty())
-    {
-        g.setFont (font (12.5f));
-        g.drawFittedText ("Your tracks will appear here.", getLocalBounds().reduced (12, 30), juce::Justification::centredTop, 3);
-    }
-}
-
-void TrackList::resized()
-{
-    auto r = getLocalBounds();
-    r.removeFromTop (24);
-    viewport.setBounds (r.reduced (2, 2));
-
-    const int rowH = 44;
-    const int width = viewport.getMaximumVisibleWidth();
-    content.setSize (width, rowH * rows.size());
-
-    for (int i = 0; i < rows.size(); ++i)
-        rows[i]->setBounds (0, i * rowH, width, rowH);
+    g.setFont (Theme::font (11.0f));
+    g.drawText ("all tracks, or drag one track's header", content, juce::Justification::topLeft);
 }
 
 //==============================================================================
@@ -404,9 +250,10 @@ void SettingsPanel::resized()
     note.setBounds (r);
 }
 
+
 //==============================================================================
 PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), trackList (p), dragArea (p)
+    : AudioProcessorEditor (&p), processor (p), arrangement (p), dragArea (p)
 {
     setLookAndFeel (&lookAndFeel);
 
@@ -418,8 +265,8 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
         addAndMakeVisible (b);
     }
 
-    offlineButton.setTooltip ("Compose on this computer, instantly, without an internet connection.");
-    claudeButton.setTooltip ("Let Claude plan the piece from your description (needs an Anthropic API key).");
+    offlineButton.setTooltip ("Compose on this computer, instantly, without an internet connection");
+    claudeButton.setTooltip ("Let Claude plan the piece from your description (needs an Anthropic API key)");
     offlineButton.onClick = [this] { if (offlineButton.getToggleState()) { processor.engine = PromptMidiProcessor::Engine::Offline; updateEngineButtons(); } };
     claudeButton.onClick = [this]
     {
@@ -433,22 +280,22 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
             showSettings();
     };
 
+    settingsButton.setTooltip ("Settings: Claude API key and model, MIDI export articulations");
     settingsButton.onClick = [this] { showSettings(); };
-    settingsButton.setTooltip ("API key and model for Claude AI mode");
     addAndMakeVisible (settingsButton);
 
     // Prompt
     promptEditor.setMultiLine (true, true);
     promptEditor.setReturnKeyStartsNewLine (false);
-    promptEditor.setFont (font (17.0f));
-    promptEditor.setIndents (12, 10);
-    promptEditor.setTextToShowWhenEmpty ("Describe the music... e.g. \"Generate me a fantasy orchestral midi\" or \"Make me a soft piano midi\"",
+    promptEditor.setFont (font (16.0f));
+    promptEditor.setIndents (14, 12);
+    promptEditor.setTextToShowWhenEmpty ("Describe the music...   e.g. \"Generate me a fantasy orchestral midi\" or \"Make me a soft piano midi\"",
                                          Theme::textDim);
     promptEditor.setText (processor.prompt, false);
     promptEditor.onReturnKey = [this] { startGeneration(); };
     addAndMakeVisible (promptEditor);
 
-    generateButton.setColour (juce::TextButton::buttonColourId, Theme::accent);
+    generateButton.setPrimary (true);
     generateButton.onClick = [this]
     {
         if (processor.isGenerating())
@@ -460,14 +307,13 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     addAndMakeVisible (generateButton);
 
     variationButton.onClick = [this] { processor.makeVariation(); };
-    variationButton.setTooltip ("Same style, key and instruments - new melody and rhythms");
+    variationButton.setTooltip ("A new take with the same key, tempo, length and instruments: new tune, harmony, form and orchestration");
     addAndMakeVisible (variationButton);
 
     for (auto& ex : examples)
     {
         auto* chip = chips.add (new juce::TextButton (ex.label));
         chipPrompts.add (ex.prompt);
-        chip->setColour (juce::TextButton::buttonColourId, Theme::panel);
         chip->setTooltip (juce::String ("\"") + ex.prompt + "\"");
         const int index = chips.size() - 1;
         chip->onClick = [this, index]
@@ -513,8 +359,8 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     lengthBox.addItem ("Cue (~1 min)", 3);
     lengthBox.addItem ("Full (~2.5 min)", 4);
     lengthBox.addItem ("Extended (~4 min)", 5);
-    lengthBox.setTooltip ("Length of orchestral cues: a sketch, or a complete cue with intro, theme, development, build, "
-                          "climax and outro (or end stinger and loop points when the prompt asks for a loop)");
+    lengthBox.setTooltip ("How long the piece is. Orchestral cues get a complete form (intro, theme, development, build, "
+                          "climax, outro or end stinger with loop points); songs get more sections.");
 
     tempoSlider.setSliderStyle (juce::Slider::LinearBar);
     tempoSlider.setRange (39.0, 220.0, 1.0);
@@ -536,6 +382,10 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     tempoSlider.onValueChange = [this] { if (! tempoSlider.isMouseButtonDown()) pushControls(); };
     addAndMakeVisible (tempoSlider);
 
+    instrumentsButton.setTooltip ("Choose the instruments: automatic from the prompt, or your own - one for a solo piece, or any ensemble");
+    instrumentsButton.onClick = [this] { showInstruments(); };
+    addAndMakeVisible (instrumentsButton);
+
     styleLabel (seedValue, 13.0f, Theme::text);
     seedValue.setEditable (true);
     seedValue.setColour (juce::Label::backgroundColourId, Theme::raised);
@@ -554,40 +404,45 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     };
     addAndMakeVisible (seedValue);
 
-    lockSeedButton.setTooltip ("Keep the seed, so Generate gives the same result for the same prompt");
+    lockSeedButton.setClickingTogglesState (true);
+    lockSeedButton.setTooltip ("Lock the seed: Generate gives the same result for the same prompt");
     lockSeedButton.onClick = [this] { processor.seedLocked = lockSeedButton.getToggleState(); };
     addAndMakeVisible (lockSeedButton);
 
-    // Info
+    // Result
     styleLabel (titleLabel, 19.0f, Theme::text, true);
-    styleLabel (summaryLabel, 13.5f, Theme::text);
+    styleLabel (summaryLabel, 13.0f, Theme::textMid);
     styleLabel (interpretationLabel, 12.0f, Theme::textDim);
     styleLabel (statusLabel, 12.5f, Theme::textDim);
     statusLabel.setJustificationType (juce::Justification::centredRight);
-    styleLabel (qualityLabel, 12.5f, Theme::ok);
+    styleLabel (qualityLabel, 12.5f, Theme::ok, true);
     qualityLabel.setJustificationType (juce::Justification::centredRight);
 
     for (auto* l : { &titleLabel, &summaryLabel, &interpretationLabel, &statusLabel, &qualityLabel })
         addAndMakeVisible (l);
 
-    trackList.onSelectionChanged = [this] (int index) { pianoRoll.setSelectedTrack (index); };
-    addAndMakeVisible (trackList);
-    addAndMakeVisible (pianoRoll);
+    arrangement.setComponentID ("arrangement");
+    addAndMakeVisible (arrangement);
 
-    // Footer
-    playButton.setClickingTogglesState (false);
-    playButton.onClick = [this] { processor.setPreviewPlaying (! processor.isPreviewPlaying()); };
-    playButton.setTooltip ("Preview the result. While the host is playing (and Follow host is on) playback follows the host instead.");
+    // Transport
+    playButton.setTooltip ("Preview the result here (Space). The preview is only heard inside PromptMIDI - never with your DAW's playback.");
+    playButton.onClick = [this] { processor.setPreviewPlaying (! processor.isPreviewPlaying(), processor.getCursorTick()); };
     addAndMakeVisible (playButton);
 
-    loopToggle.setTooltip ("Loop during playback. Cues with loop points play the intro once, then repeat the loop region "
-                           "(green in the piano roll), the way a game engine plays them");
-    syncToggle.setTooltip ("Off (default): PromptMIDI stays silent while your DAW plays. On: it sends the piece as MIDI out "
-                           "in time with the host transport, to drive instruments on other tracks (never audio)");
-    soundToggle.setTooltip ("Hear the result through PromptMIDI's built-in sketch synth");
+    styleLabel (positionLabel, 13.0f, Theme::textMid);
+    positionLabel.setFont (Theme::font (13.0f, Theme::Weight::Medium));
+    positionLabel.setTooltip ("Bar.beat and time of the playhead (or of the play cursor)");
+    addAndMakeVisible (positionLabel);
 
-    for (auto* t : { &loopToggle, &syncToggle, &soundToggle })
-        addAndMakeVisible (t);
+    loopButton.setClickingTogglesState (true);
+    loopButton.setTooltip ("Loop the preview. Cues with loop points play the intro once, then repeat the loop region (green), as a game would.");
+    soundButton.setClickingTogglesState (true);
+    soundButton.setTooltip ("Preview sound (a simple sketch synth, heard only inside PromptMIDI)");
+    hostMidiToggle.setTooltip ("Off (default): PromptMIDI stays silent while your DAW plays. On: it sends the piece as MIDI out in time "
+                               "with the host transport, to drive instruments on other tracks (never audio).");
+
+    for (auto* c : std::initializer_list<juce::Component*> { &loopButton, &soundButton, &hostMidiToggle })
+        addAndMakeVisible (c);
 
     volumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     volumeSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -600,16 +455,17 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     exportButton.setTooltip ("Save the MIDI file (all tracks that aren't muted)");
     addAndMakeVisible (exportButton);
 
-    loopAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "loop", loopToggle);
-    syncAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "hostMidiOut", syncToggle);
-    soundAttachment   = std::make_unique<ButtonAttachment> (processor.parameters, "previewSound", soundToggle);
-    volumeAttachment  = std::make_unique<SliderAttachment> (processor.parameters, "previewVolume", volumeSlider);
+    loopAttachment     = std::make_unique<ButtonAttachment> (processor.parameters, "loop", loopButton);
+    hostMidiAttachment = std::make_unique<ButtonAttachment> (processor.parameters, "hostMidiOut", hostMidiToggle);
+    soundAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "previewSound", soundButton);
+    volumeAttachment   = std::make_unique<SliderAttachment> (processor.parameters, "previewVolume", volumeSlider);
 
     processor.addChangeListener (this);
 
     setResizable (true, true);
-    setResizeLimits (1000, 620, 2400, 1500);
-    setSize (1100, 740);
+    setResizeLimits (1040, 680, 2600, 1600);
+    setSize (1240, 800);
+    setWantsKeyboardFocus (true);
 
     refreshFromProcessor();
     startTimerHz (30);
@@ -627,62 +483,99 @@ void PromptMidiEditor::paint (juce::Graphics& g)
 {
     g.fillAll (Theme::background);
 
-    auto header = getLocalBounds().removeFromTop (56).reduced (18, 0);
-
-    // Logo: a small note-head mark next to the name.
-    auto mark = header.removeFromLeft (28).toFloat().withSizeKeepingCentre (24.0f, 24.0f);
-    juce::ColourGradient grad (Theme::accentHot, mark.getX(), mark.getY(), Theme::accent.darker (0.3f), mark.getRight(), mark.getBottom(), false);
+    // Header: mark, name, tagline.
+    auto header = getLocalBounds().removeFromTop (56).reduced (20, 0);
+    auto mark = header.removeFromLeft (30).toFloat().withSizeKeepingCentre (28.0f, 28.0f);
+    juce::ColourGradient grad (Theme::accentHot, mark.getX(), mark.getY(), Theme::accent.darker (0.35f), mark.getRight(), mark.getBottom(), false);
     g.setGradientFill (grad);
-    g.fillRoundedRectangle (mark, 6.0f);
+    g.fillRoundedRectangle (mark, 7.0f);
     g.setColour (juce::Colours::white);
-    g.fillEllipse (mark.getX() + 6.0f, mark.getBottom() - 11.0f, 8.0f, 6.0f);
-    g.fillRect (mark.getX() + 12.5f, mark.getY() + 5.0f, 1.8f, 14.0f);
+    g.fillEllipse (mark.getX() + 7.5f, mark.getBottom() - 12.5f, 8.5f, 6.5f);
+    g.fillRect (mark.getX() + 14.6f, mark.getY() + 6.0f, 1.8f, 16.0f);
+    g.fillRect (mark.getX() + 14.6f, mark.getY() + 6.0f, 6.5f, 1.8f);
 
-    header.removeFromLeft (10);
+    header.removeFromLeft (12);
     g.setColour (Theme::text);
-    g.setFont (font (20.0f, true));
-    g.drawText ("PromptMIDI", header.removeFromLeft (130), juce::Justification::centredLeft);
+    g.setFont (Theme::font (19.0f, Theme::Weight::SemiBold));
+    g.drawText ("PromptMIDI", header.removeFromLeft (120), juce::Justification::centredLeft);
     g.setColour (Theme::textDim);
-    g.setFont (font (13.0f));
-    g.drawText ("Describe it. Get MIDI.", header.removeFromLeft (200), juce::Justification::centredLeft);
+    g.setFont (Theme::font (13.0f));
+    g.drawText ("Describe it. Get MIDI.", header.removeFromLeft (220), juce::Justification::centredLeft);
 
     g.setColour (Theme::outline);
     g.drawHorizontalLine (56, 0.0f, (float) getWidth());
-    g.drawHorizontalLine (getHeight() - 72, 0.0f, (float) getWidth());
+
+    // Prompt card
+    auto card = promptEditor.getBounds().getUnion (seedValue.getBounds()).getUnion (lockSeedButton.getBounds())
+                    .getUnion (generateButton.getBounds()).expanded (14, 12).toFloat();
+    g.setColour (Theme::panel);
+    g.fillRoundedRectangle (card, 10.0f);
+    g.setColour (Theme::outline.withAlpha (0.7f));
+    g.drawRoundedRectangle (card.reduced (0.5f), 10.0f, 1.0f);
+
+    // Arrangement frame
+    auto frame = arrangement.getBounds().toFloat().expanded (1.0f);
+    g.setColour (Theme::outline);
+    g.drawRoundedRectangle (frame, 6.0f, 1.0f);
+
+    // Footer
+    auto footer = getLocalBounds().removeFromBottom (64);
+    g.setColour (Theme::panelDark);
+    g.fillRect (footer);
+    g.setColour (Theme::outline);
+    g.drawHorizontalLine (footer.getY(), 0.0f, (float) getWidth());
 }
 
 void PromptMidiEditor::resized()
 {
     auto r = getLocalBounds();
-    const int pad = 18;
+    const int pad = 20;
 
     // Header
     auto header = r.removeFromTop (56).reduced (pad, 12);
-    settingsButton.setBounds (header.removeFromRight (90));
+    settingsButton.setBounds (header.removeFromRight (34));
     header.removeFromRight (12);
     claudeButton.setBounds (header.removeFromRight (100));
-    offlineButton.setBounds (header.removeFromRight (90));
+    offlineButton.setBounds (header.removeFromRight (88));
+
+    // Footer
+    auto footer = r.removeFromBottom (64).reduced (pad, 12);
+    playButton.setBounds (footer.removeFromLeft (48));
+    footer.removeFromLeft (12);
+    positionLabel.setBounds (footer.removeFromLeft (112));
+    footer.removeFromLeft (6);
+    loopButton.setBounds (footer.removeFromLeft (36).reduced (0, 2));
+    footer.removeFromLeft (8);
+    soundButton.setBounds (footer.removeFromLeft (36).reduced (0, 2));
+    footer.removeFromLeft (8);
+    volumeSlider.setBounds (footer.removeFromLeft (96));
+    footer.removeFromLeft (20);
+    exportButton.setBounds (footer.removeFromRight (132));
+    footer.removeFromRight (10);
+    dragArea.setBounds (footer.removeFromRight (juce::jmin (270, juce::jmax (200, footer.getWidth() - 200))));
+    footer.removeFromRight (16);
+    hostMidiToggle.setBounds (footer.removeFromLeft (juce::jmin (190, footer.getWidth())));
 
     r.reduce (pad, 0);
-    r.removeFromTop (14);
+    r.removeFromTop (16);
 
-    // Prompt + buttons
-    auto promptRow = r.removeFromTop (86);
-    auto buttons = promptRow.removeFromRight (150);
+    // Prompt card contents
+    auto card = r.removeFromTop (172).reduced (14, 12);
+    auto promptRow = card.removeFromTop (72);
+    auto buttons = promptRow.removeFromRight (164);
     promptRow.removeFromRight (12);
     promptEditor.setBounds (promptRow);
-    generateButton.setBounds (buttons.removeFromTop (46));
+    generateButton.setBounds (buttons.removeFromTop (40));
     buttons.removeFromTop (6);
     variationButton.setBounds (buttons);
 
-    // Example chips
-    r.removeFromTop (10);
-    auto chipRow = r.removeFromTop (28);
+    card.removeFromTop (10);
+    auto chipRow = card.removeFromTop (26);
     int x = chipRow.getX();
 
     for (auto* chip : chips)
     {
-        const int w = (int) juce::GlyphArrangement::getStringWidth (font (13.0f), chip->getButtonText()) + 26;
+        const int w = (int) juce::GlyphArrangement::getStringWidth (Theme::font (12.5f, Theme::Weight::Medium), chip->getButtonText()) + 26;
         const bool fits = x + w <= chipRow.getRight();
         chip->setVisible (fits);
 
@@ -692,33 +585,38 @@ void PromptMidiEditor::resized()
         x += w + 8;
     }
 
-    // Overrides
-    r.removeFromTop (12);
-    auto controlsRow = r.removeFromTop (30);
+    card.removeFromTop (12);
+    auto controlsRow = card.removeFromTop (32);
+    const int fixedWidth = (30 + 40 + 44 + 34 + 46 + 36) + 6 * 13 + 34;
+    const int naturalBoxes = 74 + 150 + 116 + 70 + 140 + 156 + 84;
+    const double scale = juce::jlimit (0.6, 1.0, (double) (controlsRow.getWidth() - fixedWidth) / naturalBoxes);
 
-    // The boxes share whatever width there is beyond the labels and gaps (up to their natural size).
-    const int fixedWidth = (30 + 40 + 46 + 34 + 46 + 36) + 6 * 18 + 64;
-    const int naturalBoxes = 72 + 150 + 124 + 70 + 142 + 96;
-    const double boxScale = juce::jlimit (0.6, 1.0, (double) (controlsRow.getWidth() - fixedWidth) / naturalBoxes);
-
-    auto place = [&] (juce::Component& label, juce::Component& comp, int labelW, int compW)
+    auto place = [&] (juce::Component* label, juce::Component& comp, int labelW, int compW)
     {
-        label.setBounds (controlsRow.removeFromLeft (labelW));
-        controlsRow.removeFromLeft (6);
-        comp.setBounds (controlsRow.removeFromLeft ((int) (compW * boxScale)));
+        if (label != nullptr)
+        {
+            label->setBounds (controlsRow.removeFromLeft (labelW));
+            controlsRow.removeFromLeft (6);
+        }
+
+        comp.setBounds (controlsRow.removeFromLeft ((int) (compW * scale)));
         controlsRow.removeFromLeft (12);
     };
 
-    place (keyLabel, keyBox, 30, 72);
-    place (scaleLabel, scaleBox, 40, 150);
-    place (tempoLabel, tempoSlider, 46, 124);
-    place (barsLabel, barsBox, 34, 70);
-    place (lengthLabel, lengthBox, 46, 142);
-    place (seedLabel, seedValue, 36, 96);
-    lockSeedButton.setBounds (controlsRow.removeFromLeft (64));
+    place (&keyLabel, keyBox, 30, 74);
+    place (&scaleLabel, scaleBox, 40, 150);
+    place (&tempoLabel, tempoSlider, 44, 116);
+    place (&barsLabel, barsBox, 34, 70);
+    place (&lengthLabel, lengthBox, 46, 140);
+    place (nullptr, instrumentsButton, 0, 156);
+    lockSeedButton.setBounds (controlsRow.removeFromRight (32));
+    controlsRow.removeFromRight (6);
+    seedValue.setBounds (controlsRow.removeFromRight ((int) (84 * scale)));
+    controlsRow.removeFromRight (6);
+    seedLabel.setBounds (controlsRow.removeFromRight (36));
 
-    // Info
-    r.removeFromTop (12);
+    // Result summary
+    r.removeFromTop (14);
     auto line1 = r.removeFromTop (26);
     statusLabel.setBounds (line1.removeFromRight (line1.getWidth() / 2));
     titleLabel.setBounds (line1);
@@ -726,34 +624,33 @@ void PromptMidiEditor::resized()
     qualityLabel.setBounds (line2.removeFromRight (juce::jmin (420, line2.getWidth() / 2)));
     summaryLabel.setBounds (line2);
     interpretationLabel.setBounds (r.removeFromTop (18));
-    r.removeFromTop (8);
+    r.removeFromTop (10);
 
-    // Footer
-    auto footer = getLocalBounds().removeFromBottom (72).reduced (pad, 12);
-    r.removeFromBottom (72 + 12);
-
-    playButton.setBounds (footer.removeFromLeft (84));
-    footer.removeFromLeft (12);
-    loopToggle.setBounds (footer.removeFromLeft (64));
-    syncToggle.setBounds (footer.removeFromLeft (160));
-    soundToggle.setBounds (footer.removeFromLeft (118));
-    volumeSlider.setBounds (footer.removeFromLeft (90).reduced (0, 10));
-    footer.removeFromLeft (10);
-
-    exportButton.setBounds (footer.removeFromRight (112));
-    footer.removeFromRight (12);
-    dragArea.setBounds (footer.removeFromRight (juce::jmin (300, juce::jmax (200, footer.getWidth()))));
-
-    // Main area
-    trackList.setBounds (r.removeFromLeft (280));
-    r.removeFromLeft (12);
-    pianoRoll.setBounds (r);
+    arrangement.setBounds (r.withTrimmedBottom (14));
 }
 
 //==============================================================================
+bool PromptMidiEditor::keyPressed (const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::spaceKey && processor.hasComposition())
+    {
+        processor.setPreviewPlaying (! processor.isPreviewPlaying(), processor.getCursorTick());
+        return true;
+    }
+
+    return false;
+}
+
 void PromptMidiEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     refreshFromProcessor();
+}
+
+void PromptMidiEditor::setStatusText (const juce::String& text, juce::Colour colour)
+{
+    statusLabel.setText (text, juce::dontSendNotification);
+    statusLabel.setColour (juce::Label::textColourId, colour);
+    statusLabel.setTooltip (text);
 }
 
 void PromptMidiEditor::refreshFromProcessor()
@@ -762,17 +659,24 @@ void PromptMidiEditor::refreshFromProcessor()
     const bool has = processor.hasComposition();
     const bool busy = processor.isGenerating();
 
-    titleLabel.setText (has ? fromStd (comp.title) : juce::String ("No MIDI yet"), juce::dontSendNotification);
-    summaryLabel.setText (has ? fromStd (comp.summary()) : juce::String ("Pick an example below the prompt, or write your own."),
+    titleLabel.setText (has ? fromStd (comp.title) + (processor.isEdited() ? juce::String ("  (edited)") : juce::String())
+                            : juce::String ("No MIDI yet"), juce::dontSendNotification);
+    summaryLabel.setText (has ? fromStd (comp.summary()) + (comp.form.empty() ? juce::String() : juce::String::fromUTF8 ("   \xc2\xb7   ") + fromStd (comp.form))
+                              : juce::String ("Pick an example below the prompt, or write your own."),
                           juce::dontSendNotification);
+    summaryLabel.setTooltip (summaryLabel.getText());
 
     juce::StringArray notes;
 
     for (auto& line : processor.getSpec().interpretation)
         notes.add (fromStd (line));
 
-    interpretationLabel.setText (has ? notes.joinIntoString ("    \xc2\xb7    ") : juce::String(), juce::dontSendNotification);
+    interpretationLabel.setText (has ? notes.joinIntoString (juce::String::fromUTF8 ("    \xc2\xb7    ")) : juce::String(), juce::dontSendNotification);
     interpretationLabel.setTooltip (notes.joinIntoString ("\n"));
+
+    const auto status = processor.getStatus();
+    setStatusText (processor.getStatusMessage(), status == PromptMidiProcessor::Status::Error ? Theme::error
+                                               : status == PromptMidiProcessor::Status::Working ? Theme::accentHot : Theme::textDim);
 
     // Every generation is checked; show the verdict, with the details and the form on hover.
     if (has && comp.quality.score > 0.0)
@@ -806,13 +710,8 @@ void PromptMidiEditor::refreshFromProcessor()
         qualityLabel.setTooltip ({});
     }
 
-    const auto status = processor.getStatus();
-    statusLabel.setText (processor.getStatusMessage(), juce::dontSendNotification);
-    statusLabel.setColour (juce::Label::textColourId, status == PromptMidiProcessor::Status::Error ? Theme::error
-                                                    : status == PromptMidiProcessor::Status::Working ? Theme::accentHot : Theme::textDim);
-    statusLabel.setTooltip (processor.getStatusMessage());
-
-    generateButton.setButtonText (busy ? "Cancel" : "Generate");
+    generateButton.setLabel (busy ? "Cancel" : "Generate");
+    generateButton.setIcon (busy ? Icons::Kind::Cross : Icons::Kind::Sparkle);
     variationButton.setEnabled (has && ! busy);
     playButton.setEnabled (has);
     exportButton.setEnabled (has);
@@ -820,23 +719,24 @@ void PromptMidiEditor::refreshFromProcessor()
 
     seedValue.setText (juce::String ((juce::int64) processor.seed), juce::dontSendNotification);
     lockSeedButton.setToggleState (processor.seedLocked, juce::dontSendNotification);
+    instrumentsButton.setLabel ("Instruments: " + InstrumentPicker::summary (processor.controls.instruments));
+    positionLabel.setText (has ? timeText (processor.getPlayheadTick() >= 0.0 ? processor.getPlayheadTick() : processor.getCursorTick(), comp)
+                               : juce::String(), juce::dontSendNotification);
 
     if (promptEditor.getText().isEmpty() && processor.prompt.isNotEmpty())
         promptEditor.setText (processor.prompt, false);
 
     if (shownVersion != processor.getCompositionVersion())
     {
+        const bool newPiece = shownPiece != processor.getPieceVersion();
         shownVersion = processor.getCompositionVersion();
-        trackList.rebuild();
-        pianoRoll.setComposition (has ? &comp : nullptr);
+        shownPiece = processor.getPieceVersion();
+        arrangement.compositionChanged (newPiece);
     }
     else
     {
-        trackList.refreshMutes();
+        arrangement.mutesChanged();
     }
-
-    pianoRoll.setMutedMask (processor.getMutedMask());
-    pianoRoll.setSelectedTrack (trackList.getSelected());
 
     updateEngineButtons();
     pullControls();
@@ -844,8 +744,12 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
-    pianoRoll.setPlayhead (processor.getPlayheadTick());
-    playButton.setButtonText (processor.isPreviewPlaying() ? "Stop" : "Play");
+    const bool playing = processor.isPreviewPlaying();
+    const double head = processor.getPlayheadTick();
+    arrangement.setPlayhead (head);
+    playButton.setIcon (playing ? Icons::Kind::Stop : Icons::Kind::Play);
+    positionLabel.setText (processor.hasComposition() ? timeText (head >= 0.0 ? head : processor.getCursorTick(), processor.getComposition())
+                                                      : juce::String(), juce::dontSendNotification);
 
     if (processor.getStatus() == PromptMidiProcessor::Status::Working)
     {
@@ -910,7 +814,7 @@ void PromptMidiEditor::showSettings()
     juce::Component::SafePointer<PromptMidiEditor> safe (this);
     auto panel = std::make_unique<SettingsPanel> (*processor.settings, [safe]
     {
-        if (safe != nullptr)
+        if (safe != nullptr && safe->processor.settings->hasApiKey())
         {
             safe->processor.engine = PromptMidiProcessor::Engine::Claude;
             safe->updateEngineButtons();
@@ -918,6 +822,26 @@ void PromptMidiEditor::showSettings()
     });
 
     juce::CallOutBox::launchAsynchronously (std::move (panel), settingsButton.getBounds(), this);
+}
+
+void PromptMidiEditor::showInstruments()
+{
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    auto picker = std::make_unique<InstrumentPicker> (processor.controls.instruments, [safe] (const InstrumentPicker::Choices& choices)
+    {
+        if (safe == nullptr)
+            return;
+
+        safe->processor.controls.instruments = choices;
+        safe->instrumentsButton.setLabel ("Instruments: " + InstrumentPicker::summary (choices));
+
+        if (safe->processor.hasComposition())
+            safe->processor.controlsChanged();
+        else if (safe->promptEditor.getText().trim().isNotEmpty())
+            safe->startGeneration();
+    });
+
+    juce::CallOutBox::launchAsynchronously (std::move (picker), instrumentsButton.getBounds(), this);
 }
 
 void PromptMidiEditor::exportMidi()
@@ -945,8 +869,7 @@ void PromptMidiEditor::exportMidi()
                                   file = file.withFileExtension ("mid");
 
                               const bool ok = safe->processor.writeMidiFile (file);
-                              safe->statusLabel.setText (ok ? "Saved " + file.getFileName() : "Couldn't write " + file.getFullPathName(),
-                                                         juce::dontSendNotification);
-                              safe->statusLabel.setColour (juce::Label::textColourId, ok ? Theme::ok : Theme::error);
+                              safe->setStatusText (ok ? "Saved " + file.getFileName() : "Couldn't write " + file.getFullPathName(),
+                                                   ok ? Theme::ok : Theme::error);
                           });
 }

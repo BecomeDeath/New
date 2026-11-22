@@ -1,0 +1,49 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+#include "Icons.h"
+#include "PromptInterpreter.h"
+
+#include <functional>
+#include <vector>
+
+/** Choose the instruments to compose for: from the prompt (automatic), or your own list - one
+    instrument for a solo piece, or any ensemble - each with an optional role.
+*/
+class InstrumentPicker : public juce::Component
+{
+public:
+    using Choices = std::vector<pm::InstrumentChoice>;
+
+    InstrumentPicker (const Choices& current, std::function<void (const Choices&)> onApply);
+    ~InstrumentPicker() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    /** "Auto", "Piano", "Flutes + 2" ... for the button that opens the picker. */
+    static juce::String summary (const Choices&);
+
+private:
+    class Row;
+
+    void rebuild();
+    void setCustom (bool);
+    void addInstrument (const pm::CatalogueEntry&);
+    void showAddMenu();
+    void showPresets();
+
+    Choices choices;
+    bool custom = false;
+    std::function<void (const Choices&)> onApply;
+
+    juce::TextButton autoButton { "From the prompt" }, customButton { "My instruments" };
+    IconButton addButton { "add", Icons::Kind::Plus, "Add instrument" };
+    juce::TextButton presetsButton { "Presets" }, clearButton { "Clear" }, applyButton { "Apply" };
+    juce::Viewport viewport;
+    juce::Component list;
+    juce::OwnedArray<Row> rows;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InstrumentPicker)
+};

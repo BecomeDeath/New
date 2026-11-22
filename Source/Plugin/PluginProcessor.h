@@ -87,6 +87,7 @@ public:
     const pm::StyleSpec& getSpec() const                     { return spec; }
     const pm::Composition& getComposition() const            { return composition; }
     int getCompositionVersion() const                        { return compositionVersion; }
+    int getPieceVersion() const                              { return pieceVersion; }   // changes only for a new piece, not for edits
     bool hasComposition() const                              { return composition.noteCount() > 0; }
 
     Status getStatus() const                                 { return status; }
@@ -103,6 +104,18 @@ public:
 
     /** The in-plugin preview (heard only inside PromptMIDI, never with the host). */
     void setPreviewPlaying (bool shouldPlay, double fromTick = 0.0);
+
+    /** Where Play starts (set by clicking the timeline ruler). */
+    double getCursorTick() const                             { return cursorTick; }
+    void setCursorTick (double tick);
+
+    /** Replaces one track's notes (from the note editor), as an undoable step. */
+    void editTrackNotes (int trackIndex, std::vector<pm::Note> notes, const juce::String& actionName);
+    juce::UndoManager& getUndoManager()                      { return undoManager; }
+    bool isEdited() const                                    { return edited; }
+
+    /** Plays one note through the preview sound (clicking a note in the editor). Never during host playback. */
+    void auditionNote (int trackIndex, int pitch, int velocity);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
     double getPlayheadTick() const                           { return playheadTick.load(); }
 
@@ -130,6 +143,8 @@ private:
     };
 
     void applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed);
+    void setTrackNotes (int trackIndex, const std::vector<pm::Note>& notes);
+    friend struct NoteEditAction;
     void publishPlayback();
     void applyControls (pm::StyleSpec&, bool includeMode) const;
     juce::String controlsDescription() const;
@@ -146,6 +161,7 @@ private:
     pm::StyleSpec baseSpec;   // Claude's plan as received (offline plans are re-derived from the prompt)
     pm::Composition composition;
     int compositionVersion = 0;
+    int pieceVersion = 0;
     juce::String lastPrompt;
     Engine lastEngine = Engine::Offline;
     uint64_t interpretSeed = 1;
@@ -166,6 +182,12 @@ private:
     std::atomic<bool> previewPlaying { false };
     std::atomic<bool> previewRestart { false };
     std::atomic<double> previewStartTick { 0.0 };
+    std::atomic<int> auditionRequest { -1 };   // channel << 16 | program << 8 | pitch, -1 = none
+    std::atomic<int> auditionVelocity { 90 };
+    int auditionSamplesLeft = 0, auditionChannel = -1, auditionPitch = -1;
+    double cursorTick = 0.0;
+    juce::UndoManager undoManager;
+    bool edited = false;
     std::atomic<double> playheadTick { -1.0 };
 
     // Audio thread only

@@ -3373,7 +3373,16 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
     comp.progression = spec.progression;
 
     for (auto& c : ctx.chords)
-        comp.chords.push_back ({ c.start, c.end, chordName (c.chord, keyPrefersFlats (c.keyRoot, spec.mode)), c.roman, c.pcs, c.bassPc });
+    {
+        // Spell each chord in its own section's key (a Db major contrast section uses flats).
+        Mode mode = spec.mode;
+
+        for (auto& sec : sections)
+            if (c.start >= sec.startBar * m.ticksPerBar && c.start < (sec.startBar + sec.bars) * m.ticksPerBar)
+                mode = sec.mode;
+
+        comp.chords.push_back ({ c.start, c.end, chordName (c.chord, keyPrefersFlats (c.keyRoot, mode)), c.roman, c.pcs, c.bassPc });
+    }
 
     std::set<int> usedChannels;
 

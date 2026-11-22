@@ -271,10 +271,10 @@ int main (int argc, char** argv)
         };
 
         const int looped = notesPastTheEnd (true);
-        const int stopped = notesPastTheEnd (false);
-        std::printf ("  past the end: %d note-ons looping, %d without\n", looped, stopped);
+        const int silent = notesPastTheEnd (false);
+        std::printf ("  past the end: %d note-ons looping, %d without\n", looped, silent);
         CHECK (looped > 20);
-        CHECK (stopped == 0);
+        CHECK (silent == 0);
     }
 
     plugin->releaseResources();

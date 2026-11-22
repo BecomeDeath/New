@@ -87,14 +87,21 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         AU_MAIN_TYPE                kAudioUnitType_MusicDevice
         COPY_PLUGIN_AFTER_BUILD     ${PROMPTMIDI_COPY_PLUGIN})
 
+    # The Inter typeface (SIL Open Font License, Resources/Fonts/Inter-OFL.txt) for the editor.
+    juce_add_binary_data (PromptMIDIData SOURCES
+        Resources/Fonts/Inter-Regular.ttf
+        Resources/Fonts/Inter-Medium.ttf
+        Resources/Fonts/Inter-SemiBold.ttf)
+
     set (PROMPTMIDI_PLUGIN_SOURCES
         Source/Plugin/ClaudeClient.cpp
-        Source/Plugin/PianoRoll.cpp
+        Source/Plugin/InstrumentPicker.cpp
         Source/Plugin/PluginEditor.cpp
         Source/Plugin/PluginProcessor.cpp
         Source/Plugin/PreviewSynth.cpp
         Source/Plugin/Settings.cpp
-        Source/Plugin/SpecJson.cpp)
+        Source/Plugin/SpecJson.cpp
+        Source/Plugin/Timeline.cpp)
 
     target_sources (PromptMIDI PRIVATE ${PROMPTMIDI_PLUGIN_SOURCES})
 
@@ -114,6 +121,7 @@ if (PROMPTMIDI_BUILD_PLUGIN)
     target_link_libraries (PromptMIDI
         PRIVATE
             promptmidi_core
+            PromptMIDIData
             juce::juce_audio_utils
             juce::juce_audio_processors
             juce::juce_gui_extra
@@ -148,7 +156,16 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         target_sources (promptmidi_ui_snapshot PRIVATE Tools/ui_snapshot.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
         target_include_directories (promptmidi_ui_snapshot PRIVATE Source/Plugin)
         target_compile_definitions (promptmidi_ui_snapshot PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
-        target_link_libraries (promptmidi_ui_snapshot PRIVATE promptmidi_core juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
+        target_link_libraries (promptmidi_ui_snapshot PRIVATE promptmidi_core PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
                                PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+        # The plug-in in-process: editing, variation, instruments, preview containment, the editor views.
+        juce_add_console_app (promptmidi_editor_tests PRODUCT_NAME "promptmidi_editor_tests" NEEDS_CURL TRUE)
+        target_sources (promptmidi_editor_tests PRIVATE Tests/EditorTests.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
+        target_include_directories (promptmidi_editor_tests PRIVATE Source/Plugin)
+        target_compile_definitions (promptmidi_editor_tests PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
+        target_link_libraries (promptmidi_editor_tests PRIVATE promptmidi_core PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
+                               PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+        add_test (NAME editor_tests COMMAND promptmidi_editor_tests)
     endif()
 endif()

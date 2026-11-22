@@ -2,30 +2,14 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
-#include "PianoRoll.h"
+#include "Icons.h"
+#include "InstrumentPicker.h"
 #include "PluginProcessor.h"
 #include "Theme.h"
+#include "Timeline.h"
 
 //==============================================================================
-/** Drag source that hands a .mid file to the DAW (or the desktop). */
-class MidiDragSource : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    MidiDragSource (PromptMidiProcessor& p, int trackIndex) : processor (p), track (trackIndex) {}
-
-    void setTrackIndex (int t) { track = t; }
-    int getTrackIndex() const  { return track; }
-
-    void mouseDrag (const juce::MouseEvent& e) override;
-    void mouseUp (const juce::MouseEvent&) override { dragging = false; }
-
-protected:
-    PromptMidiProcessor& processor;
-    int track = -1;
-    bool dragging = false;
-};
-
-/** The big "Drag MIDI into your DAW" target in the footer. */
+/** The "Drag MIDI into your DAW" target in the footer (all tracks that aren't muted). */
 class DragAllArea : public MidiDragSource
 {
 public:
@@ -33,46 +17,6 @@ public:
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
-};
-
-/** One row in the track list: colour, name, instrument, mute, and drag-out of that track alone. */
-class TrackRow : public MidiDragSource
-{
-public:
-    TrackRow (PromptMidiProcessor&, int index);
-
-    std::function<void (int)> onSelect;
-    void setSelected (bool);
-    void refresh();
-
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    void mouseDown (const juce::MouseEvent&) override;
-
-private:
-    juce::TextButton muteButton { "M" };
-    bool selected = false;
-};
-
-class TrackList : public juce::Component
-{
-public:
-    explicit TrackList (PromptMidiProcessor&);
-
-    std::function<void (int)> onSelectionChanged;
-    void rebuild();
-    void refreshMutes();
-    int getSelected() const { return selected; }
-
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-private:
-    PromptMidiProcessor& processor;
-    juce::Viewport viewport;
-    juce::Component content;
-    juce::OwnedArray<TrackRow> rows;
-    int selected = -1;
 };
 
 /** Settings shown in a call-out: Claude (API key, model, effort) and MIDI export articulations. */
@@ -107,6 +51,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -115,46 +60,59 @@ private:
     void refreshFromProcessor();
     void startGeneration();
     void showSettings();
+    void showInstruments();
     void exportMidi();
     void updateEngineButtons();
     void pushControls();
     void pullControls();
+    void setStatusText (const juce::String&, juce::Colour);
 
     PromptMidiProcessor& processor;
     Theme::LookAndFeel lookAndFeel;
 
-    juce::TextButton offlineButton { "Offline" }, claudeButton { "Claude AI" }, settingsButton { "Settings" };
+    // Header
+    juce::TextButton offlineButton { "Offline" }, claudeButton { "Claude AI" };
+    IconButton settingsButton { "settings", Icons::Kind::Gear };
+
+    // Prompt
     juce::TextEditor promptEditor;
-    juce::TextButton generateButton { "Generate" }, variationButton { "Variation" };
+    IconButton generateButton { "generate", Icons::Kind::Sparkle, "Generate" };
+    IconButton variationButton { "variation", Icons::Kind::Shuffle, "Variation" };
     juce::OwnedArray<juce::TextButton> chips;
     juce::StringArray chipPrompts;
 
-    juce::Label keyLabel, scaleLabel, tempoLabel, barsLabel, lengthLabel, seedLabel;
+    // Controls
+    juce::Label keyLabel, scaleLabel, tempoLabel, barsLabel, lengthLabel, instrumentsLabel, seedLabel;
     juce::ComboBox keyBox, scaleBox, barsBox, lengthBox;
     juce::Slider tempoSlider;
+    IconButton instrumentsButton { "instruments", Icons::Kind::Instruments, "Auto" };
     juce::Label seedValue;
-    juce::ToggleButton lockSeedButton { "Lock" };
+    IconButton lockSeedButton { "lock", Icons::Kind::Lock };
 
+    // Result
     juce::Label titleLabel, summaryLabel, interpretationLabel, statusLabel, qualityLabel;
-    TrackList trackList;
-    PianoRoll pianoRoll;
+    Arrangement arrangement;
 
-    juce::TextButton playButton { "Play" };
-    juce::ToggleButton loopToggle { "Loop" }, syncToggle { "Send MIDI with host" }, soundToggle { "Preview sound" };
+    // Transport
+    IconButton playButton { "play", Icons::Kind::Play };
+    juce::Label positionLabel;
+    IconButton loopButton { "loop", Icons::Kind::Loop };
+    IconButton soundButton { "sound", Icons::Kind::Speaker };
     juce::Slider volumeSlider;
+    juce::ToggleButton hostMidiToggle { "Send MIDI with host" };
     DragAllArea dragArea;
-    juce::TextButton exportButton { "Export .mid" };
+    IconButton exportButton { "export", Icons::Kind::Export, "Export .mid" };
 
     std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this, 500 };
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<ButtonAttachment> loopAttachment, syncAttachment, soundAttachment;
+    std::unique_ptr<ButtonAttachment> loopAttachment, hostMidiAttachment, soundAttachment;
     std::unique_ptr<SliderAttachment> volumeAttachment;
 
     int animationFrame = 0;
-    int shownVersion = -1;
+    int shownVersion = -1, shownPiece = -1;
     bool updatingControls = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PromptMidiEditor)
