@@ -109,12 +109,12 @@ std::vector<CueSection> planForm (const StyleSpec& s, int targetBars, bool loopa
     const int N = std::max (4, (targetBars + 2) / 4);
     std::vector<P> plan;
 
-    if (N <= 4)       plan = { { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
-    else if (N == 5)  plan = { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
-    else if (N <= 7)  plan = { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else if (N <= 9)  plan = { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else if (N <= 12) plan = { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else              plan = { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Development, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
+    if (N <= 4)       plan = std::vector<P> { { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
+    else if (N == 5)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
+    else if (N <= 7)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
+    else if (N <= 9)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
+    else if (N <= 12) plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
+    else              plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Development, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
 
     if (N == 6)
         plan.erase (plan.begin() + 2);   // no room for a build
@@ -933,79 +933,69 @@ void resolveLine (Line& line, int sectionStart, const Context& ctx, const ScaleM
     line = out;
 }
 
+/** The theme's motif: its first four to six notes from wherever the tune starts (after any
+    opening rest, across the barline if need be), at most two bars, keeping the first note's
+    position in its bar. This is the material a composer fragments and sequences.
+*/
 Line motifOf (const Line& theme, int tpb)
 {
     Line m;
+    size_t first = 0;
 
-    for (auto& t : theme)
-        if (t.onset < tpb)
+    while (first < theme.size() && theme[first].rest)
+        ++first;
+
+    if (first >= theme.size())
+        return m;
+
+    const int origin = (theme[first].onset / tpb) * tpb;
+
+    for (size_t i = first; i < theme.size(); ++i)
+    {
+        auto t = theme[i];
+        t.onset -= origin;
+
+        const bool enough = m.size() >= 4 && t.onset >= tpb;
+        const bool tooLong = t.onset >= 3 * tpb || (t.onset >= 2 * tpb && m.size() >= 3); // slow tunes may take a third bar
+
+        if (tooLong || m.size() >= 6 || enough)
+            break;
+
+        if (! t.rest)
             m.push_back (t);
+    }
 
     return m;
 }
 
-Line headOf (const Line& motif, int maxTicks)
+/** The motif's head: its first three notes (the cell that fragmentation repeats). */
+Line headOf (const Line& motif, int)
 {
     Line h;
 
     for (auto& t : motif)
-        if (t.onset < maxTicks && h.size() < 3)
+        if (h.size() < 3)
             h.push_back (t);
 
-    if (h.empty() && ! motif.empty())
-        h.push_back (motif.front());
+    if (! h.empty())
+    {
+        const int origin = h.front().onset;
+
+        for (auto& t : h)
+            t.onset -= origin;
+    }
 
     return h;
 }
 
-/** Fragmentation and sequence: the motif, then its head, stepping through the harmony;
-    the last two bars liquidate into long notes on the dominant.
-*/
-Line developLine (const Line& motif, const Line& head, int bars, int tpb, int beat, int step, int dominantIdx)
+int lineSpan (const Line& l)
 {
-    Line out;
-    const int body = std::max (1, bars - 2);
+    int end = 0;
 
-    for (int b = 0; b < body; ++b)
-    {
-        const int shift = step * b;
+    for (auto& t : l)
+        end = std::max (end, t.onset + t.dur);
 
-        if (b % 2 == 0)
-        {
-            for (auto t : motif)
-            {
-                t.onset += b * tpb;
-                t.idx += shift;
-                out.push_back (t);
-            }
-        }
-        else
-        {
-            int span = 0;
-
-            for (auto& t : head)
-                span = std::max (span, t.onset + t.dur);
-
-            span = std::max (beat, ((span + beat - 1) / beat) * beat);
-
-            for (int rep = 0; rep * span < tpb; ++rep)
-                for (auto t : head)
-                {
-                    t.onset += b * tpb + rep * span;
-
-                    if (t.onset + t.dur > (b + 1) * tpb)
-                        continue;
-
-                    t.idx += shift + rep;
-                    out.push_back (t);
-                }
-        }
-    }
-
-    for (int b = body; b < bars; ++b)
-        out.push_back ({ b * tpb, tpb, dominantIdx + (b == bars - 1 ? 0 : 2), false });
-
-    return out;
+    return end;
 }
 
 Line augmentLine (const Line& motif, int startTick, int factor, int limitTicks)
@@ -1760,21 +1750,31 @@ ScaleMap scaleFor (const CueSection& sec)
 //==============================================================================
 // Reharmonisation: restatements keep the melody, the chords underneath change.
 
-std::vector<std::string> reharmCandidates (bool majorish)
+/** Chords a restatement may be reharmonised with, per mode (numerals count the mode's own
+    degrees, so modal colour is kept: Dorian's major IV, Mixolydian's bVII, Lydian's II). */
+std::vector<std::string> reharmCandidates (Mode mode)
 {
-    if (majorish)
-        return { "I", "ii", "iii", "IV", "V", "vi", "iv", "bVI", "bVII", "V7/V", "V7/vi", "V7/ii", "V7/IV", "ii7", "IVmaj7", "vi7" };
-
-    return { "i", "iio", "III", "iv", "v", "V", "VI", "VII", "V7/iv", "V7/III", "V7/VI", "iv7", "VImaj7" };
+    switch (mode)
+    {
+        case Mode::Major:         return { "I", "ii", "iii", "IV", "V", "vi", "iv", "bVI", "bVII", "V7/V", "V7/vi", "V7/ii", "V7/IV", "ii7", "IVmaj7", "vi7" };
+        case Mode::Minor:         return { "i", "iio", "III", "iv", "v", "V", "VI", "VII", "V7/iv", "V7/III", "V7/VI", "iv7", "VImaj7" };
+        case Mode::HarmonicMinor: return { "i", "iio", "iv", "V", "VI", "V7/iv", "iv7" };
+        case Mode::Dorian:        return { "i", "ii", "III", "IV", "v", "VII", "i7", "IV7" };
+        case Mode::Mixolydian:    return { "I", "ii", "IV", "v", "vi", "VII", "IVmaj7" };
+        case Mode::Lydian:        return { "I", "II", "iii", "V", "vi", "vii", "Imaj7" };
+        case Mode::Phrygian:      return { "i", "II", "III", "iv", "VI", "vii" };
+        default:                  return {};
+    }
 }
 
 void reharmonise (Harmony& h, const Line& theme, const CueSection& sec, const Language& L, double amount, Rng& rng, const Meter& m)
 {
-    if (! L.canReharm)
+    const auto candidates = reharmCandidates (sec.mode);
+
+    if (candidates.empty())
         return;
 
     const ScaleMap sm = scaleFor (sec);
-    const auto candidates = reharmCandidates (L.majorish);
     const int bars = (int) h.size();
 
     // Keep the last two bars of each 8-bar unit: the cadence is the phrase's punctuation.
@@ -1782,6 +1782,9 @@ void reharmonise (Harmony& h, const Line& theme, const CueSection& sec, const La
 
     Chord prevChord;
     bool havePrev = false;
+    int changed = 0, fallbackBar = -1;
+    double fallbackScore = -1e9;
+    std::string fallbackChord;
 
     for (int b = 0; b < bars; ++b)
     {
@@ -1806,12 +1809,14 @@ void reharmonise (Harmony& h, const Line& theme, const CueSection& sec, const La
                 strongPcs.push_back (wrapPc (sm.pitch (t.idx)));
         }
 
-        if (strongPcs.empty() || ! rng.chance (amount))
+        if (strongPcs.empty())
         {
             parseChordSymbol (h[(size_t) b].chords[0], sec.keyRoot, sec.mode, prevChord);
             havePrev = true;
             continue;
         }
+
+        const bool tryThisBar = rng.chance (amount);
 
         const std::string original = h[(size_t) b].chords[0];
         Chord nextChord;
@@ -1819,12 +1824,26 @@ void reharmonise (Harmony& h, const Line& theme, const CueSection& sec, const La
 
         std::string best = original;
         double bestScore = -1e9;
+        std::string bestOther;
+        double bestOtherScore = -1e9;
 
         for (auto& cand : candidates)
         {
             Chord c;
 
             if (! parseChordSymbol (cand, sec.keyRoot, sec.mode, c) || ! c.containsPc (strongPcs[0]))
+                continue;
+
+            // The theme is fixed: new harmony must not rub against any of its strong notes
+            // (otherwise the clash resolver would have to bend the tune).
+            bool rubs = false;
+
+            for (int pc : strongPcs)
+                if (! c.containsPc (pc))
+                    for (int cpc : c.pitchClasses())
+                        rubs = rubs || wrapPc (pc - cpc) == 1 || wrapPc (cpc - pc) == 1;
+
+            if (rubs && cand != original)
                 continue;
 
             double score = 0.0;
@@ -1863,12 +1882,35 @@ void reharmonise (Harmony& h, const Line& theme, const CueSection& sec, const La
                 bestScore = score;
                 best = cand;
             }
+
+            if (cand != original && score > bestOtherScore)
+            {
+                bestOtherScore = score;
+                bestOther = cand;
+            }
         }
 
-        h[(size_t) b].chords[0] = best;
-        parseChordSymbol (best, sec.keyRoot, sec.mode, prevChord);
+        if (! bestOther.empty() && bestOtherScore > fallbackScore)
+        {
+            fallbackScore = bestOtherScore;
+            fallbackBar = b;
+            fallbackChord = bestOther;
+        }
+
+        if (tryThisBar)
+        {
+            changed += best != original ? 1 : 0;
+            h[(size_t) b].chords[0] = best;
+        }
+
+        parseChordSymbol (h[(size_t) b].chords[0], sec.keyRoot, sec.mode, prevChord);
         havePrev = true;
     }
+
+    // A restatement is always recoloured somewhere: if chance changed nothing, take the
+    // best-fitting alternative found.
+    if (changed == 0 && fallbackBar >= 0 && fallbackScore > -0.5)
+        h[(size_t) fallbackBar].chords[0] = fallbackChord;
 }
 
 //==============================================================================
@@ -2390,10 +2432,119 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
 
             case Kind::Development:
             {
+                // Sequence: each repetition follows the harmony's root motion, so the motif keeps
+                // its relationship to every chord; then fragmentation (the head cell, twice per unit)
+                // and liquidation (its first two notes, rising), then a retransition on the dominant.
                 const int dominantIdx = n * ((tlo + thi) / 2 / n) + (n >= 7 ? 4 : 3);
-                L.line = developLine (motif, head, sec.bars, tpb, m.beatTicks, -1, dominantIdx);
-                fitLine (L.line, start, ctx, L.sm, tlo, thi);
+                const int body = std::max (1, sec.bars - 2);
+                const int unitBars = std::max (1, (lineSpan (motif) + tpb - 1) / tpb);
 
+                auto degreeOf = [&] (int pc, const ScaleMap& sc)
+                {
+                    int best = 0, bestDist = 99;
+
+                    for (int d = 0; d < sc.size(); ++d)
+                    {
+                        const int dist = std::abs (wrapPc (sc.pitch (d) - pc + 6) - 6);
+
+                        if (dist < bestDist)
+                        {
+                            bestDist = dist;
+                            best = d;
+                        }
+                    }
+
+                    return best;
+                };
+
+                const int motifTick = stmtStart + (motif.empty() ? 0 : motif.front().onset) + 1;
+                const int themeRoot = degreeOf (ctx.chordAt (motifTick).chord.rootPc, homeScale);
+                int prevShift = 0;
+
+                // The transposition that follows the chord at `tick`, in the octave nearest the last
+                // one that keeps the whole fragment inside the singing range (register jumps happen
+                // between fragments, never inside one).
+                auto shiftAt = [&] (int tick, const Line& material, int extra)
+                {
+                    const int root = degreeOf (ctx.chordAt (start + tick + 1).chord.rootPc, L.sm);
+                    int lowIdx = 1 << 20, highIdx = -(1 << 20);
+
+                    for (auto& t : material)
+                    {
+                        lowIdx = std::min (lowIdx, t.idx + extra);
+                        highIdx = std::max (highIdx, t.idx + extra);
+                    }
+
+                    int best = 0, bestDist = 1 << 20;
+                    bool bestFits = false;
+
+                    for (int k = -3; k <= 3; ++k)
+                    {
+                        const int cand = root - themeRoot + k * n;
+                        const bool fits = lowIdx + cand >= tlo && highIdx + cand <= thi;
+                        const int dist = std::abs (cand - prevShift);
+
+                        if ((fits && ! bestFits) || (fits == bestFits && dist < bestDist))
+                        {
+                            bestFits = fits;
+                            bestDist = dist;
+                            best = cand;
+                        }
+                    }
+
+                    prevShift = best;
+                    return best + extra;
+                };
+
+                const int units = std::max (1, body / unitBars);
+                const int firstOffset = motif.empty() ? 0 : motif.front().onset;
+                const int headSpan = std::max (m.beatTicks, ((lineSpan (head) + m.beatTicks - 1) / m.beatTicks) * m.beatTicks);
+
+                for (int u = 0; u < units; ++u)
+                {
+                    const int unitStart = u * unitBars * tpb;
+                    const int phase = units >= 3 ? (u * 3) / units : (u == 0 ? 0 : 1); // 0 sequence, 1 fragment, 2 liquidate
+
+                    if (phase == 0)
+                    {
+                        const int shift = shiftAt (unitStart + firstOffset, motif, 0);
+
+                        for (auto t : motif)
+                        {
+                            t.onset += unitStart;
+                            t.idx += shift;
+                            L.line.push_back (t);
+                        }
+                    }
+                    else
+                    {
+                        Line cell = head;
+
+                        if (phase == 2 && cell.size() > 2)
+                            cell.resize (2);
+
+                        const int span = phase == 2 ? std::max (m.beatTicks, ((lineSpan (cell) + m.beatTicks - 1) / m.beatTicks) * m.beatTicks)
+                                                    : headSpan;
+                        int rep = 0;
+
+                        for (int at = unitStart + (phase == 1 ? firstOffset % tpb : 0); at + span <= unitStart + unitBars * tpb; at += span, ++rep)
+                        {
+                            const int shift = shiftAt (at, cell, phase == 2 ? rep : 0);
+
+                            for (auto t : cell)
+                            {
+                                t.onset += at;
+                                t.idx += shift;
+                                L.line.push_back (t);
+                            }
+                        }
+                    }
+                }
+
+                for (int b = units * unitBars; b < sec.bars; ++b)
+                    L.line.push_back ({ b * tpb, tpb, dominantIdx + (b == sec.bars - 1 ? 0 : 2), false });
+
+                // (no chord-tone snapping: it would bend the motif; clashes are resolved below)
                 // The answer: the same material half a bar later, an octave down.
                 for (auto t : L.line)
                 {
@@ -2404,7 +2555,11 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                         L.imitation.push_back (t);
                 }
 
-                fitLine (L.imitation, start, ctx, L.sm, tlo - n, thi - n);
+                for (auto& t : L.imitation)
+                {
+                    while (t.idx < tlo - n) t.idx += n;
+                    while (t.idx > thi - n) t.idx -= n;
+                }
                 break;
             }
 
@@ -2437,18 +2592,50 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
 
             case Kind::Build:
             {
-                // The motif's head climbing a step each bar, ending on a held dominant.
+                // The motif's head climbing bar by bar (each rise chosen so the head starts on a chord
+                // tone), ending on a held dominant.
+                int shift = 0;
+
                 for (int b = 0; b < sec.bars - 1; ++b)
+                {
+                    if (head.empty())
+                        break;
+
+                    const auto& ch = ctx.chordAt (start + b * tpb + head.front().onset + 1);
+                    int chosen = shift + (b > 0 ? 1 : 0);
+
+                    for (int up = (b > 0 ? 1 : 0); up <= 3; ++up)
+                        if (ch.chord.containsPc (L.sm.pitch (head.front().idx + shift + up)))
+                        {
+                            chosen = shift + up;
+                            break;
+                        }
+
+                    shift = chosen;
+
                     for (auto t : head)
                     {
                         t.onset += b * tpb;
-                        t.idx += b;
+                        t.idx += shift;
+
+                        while (t.idx > thi) t.idx -= n;
+
                         L.line.push_back (t);
                     }
+                }
+
+                // Call and response: a lower instrument echoes each rising head a beat later.
+                for (auto t : L.line)
+                {
+                    t.onset += m.beatTicks;
+                    t.idx -= n;
+
+                    if (t.onset + t.dur <= (sec.bars - 1) * tpb)
+                        L.imitation.push_back (t);
+                }
 
                 const int dominantIdx = n * ((tlo + thi) / 2 / n) + (n >= 7 ? 4 : 3);
                 L.line.push_back ({ (sec.bars - 1) * tpb, tpb, dominantIdx, false });
-                fitLine (L.line, start, ctx, L.sm, tlo, thi);
                 break;
             }
 
@@ -2644,7 +2831,7 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
         ctx.leadMelody = leadNotes;
 
         // 2. Counter-line / imitation.
-        if (sec.kind == Kind::Development && ! L.imitation.empty())
+        if ((sec.kind == Kind::Development || sec.kind == Kind::Build) && ! L.imitation.empty())
         {
             int answer = free (Inst::Vc);
 
@@ -2720,7 +2907,7 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
 
             const int celli = free (Inst::Vc);
 
-            if (celli >= 0 && i >= 0.45 && ! F.drive)
+            if (celli >= 0 && i >= 0.45 && ! F.drive && ! pastoralBassoon)
             {
                 busy.insert (celli);
                 auto ts = partSpec (spec, celli, sec, Role::Bass, pattern, std::max (0.3, i));
@@ -2779,6 +2966,13 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                 const auto& base = spec.tracks[(size_t) t];
                 const bool chordal = base.role == Role::Chords;
                 auto ts = partSpec (spec, t, sec, chordal ? Role::Chords : Role::Arpeggio, base.pattern, base.density);
+
+                if (ctx.hasBassTrack)
+                {
+                    ts.lowNote = std::max (ts.lowNote, 48);
+                    ts.highNote = std::max (ts.highNote, ts.lowNote + 19);
+                }
+
                 Rng r = secRng.fork (40);
                 Notes n;
                 Controls unusedCc;
@@ -2798,6 +2992,13 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
             busy.insert (E.arpTrack);
             const auto& base = spec.tracks[(size_t) E.arpTrack];
             auto ts = partSpec (spec, E.arpTrack, sec, Role::Arpeggio, base.pattern, std::min (0.85, base.density + (i - 0.4) * 0.5));
+
+            if (ctx.hasBassTrack)
+            {
+                ts.lowNote = std::max (ts.lowNote, 48);
+                ts.highNote = std::max (ts.highNote, ts.lowNote + 24);
+            }
+
             Rng r = secRng.fork (50);
             B.add (E.arpTrack, 0, generateArpeggio (ctx, ts, r), Articulation::Default);
         }
@@ -3051,14 +3252,18 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
 
     for (int ti = 0; ti < (int) spec.tracks.size(); ++ti)
     {
+        int baseIndex = -1;
+
         for (int group = 0; group < 3; ++group)
         {
             auto it = B.notes.find ({ ti, group });
+            const bool empty = it == B.notes.end() || it->second.empty();
 
-            if (it == B.notes.end() || (it->second.empty() && group != 0))
+            if (group != 0 && empty)
                 continue;
 
             TrackSpec ts = spec.tracks[(size_t) ti];
+            Notes notes = it != B.notes.end() ? it->second : Notes {};
 
             if (group == 1)
             {
@@ -3073,17 +3278,19 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                 ts.channel = nextChannel (44);
             }
 
+            // Silent parts are kept too, so the DAW template stays complete.
             Controls cc;
-            addExpression (ctx, ts, it->second, cc);
-            Rng post (seed ^ (0xABCDEFull + (uint64_t) ti * 31 + (uint64_t) group));
-            comp.tracks.push_back (finalizeTrack (ctx, ts, it->second, cc, post));
-        }
 
-        // Keep silent parts too, so the DAW template stays complete.
-        if (B.notes.find ({ ti, 0 }) == B.notes.end())
-        {
-            Rng post (seed ^ (0xABCDEFull + (uint64_t) ti * 31));
-            comp.tracks.push_back (finalizeTrack (ctx, spec.tracks[(size_t) ti], {}, {}, post));
+            if (! notes.empty())
+                addExpression (ctx, ts, notes, cc);
+
+            Rng post (seed ^ (0xABCDEFull + (uint64_t) ti * 31 + (uint64_t) group));
+            comp.tracks.push_back (finalizeTrack (ctx, ts, notes, cc, post));
+
+            if (group == 0)
+                baseIndex = (int) comp.tracks.size() - 1;
+            else
+                comp.tracks.back().splitFrom = baseIndex;
         }
     }
 

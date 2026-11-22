@@ -190,6 +190,66 @@ int main (int argc, char** argv)
         }
     }
 
+    std::printf ("loop region\n");
+    {
+        // A loopable cue: past its end, playback keeps cycling through the loop region (as a
+        // game engine would), and the end stinger is not played; with Loop off it stops.
+        const auto loopSpec = pm::interpretPrompt ("Epic orchestral battle loop for a boss fight", 3);
+        const auto loopComp = pm::compose (loopSpec, 3);
+        CHECK (loopComp.loopEnd > loopComp.loopStart && loopComp.loopEnd < loopComp.lengthTicks);
+
+        juce::XmlElement loopState ("PromptMIDI");
+        loopState.setAttribute ("version", 1);
+        loopState.setAttribute ("prompt", "Epic orchestral battle loop for a boss fight");
+        loopState.setAttribute ("spec", juce::JSON::toString (SpecJson::specToVar (loopSpec), true));
+        loopState.setAttribute ("composition", juce::JSON::toString (SpecJson::compositionToVar (loopComp), true));
+        juce::MemoryBlock inner;
+        juce::AudioProcessor::copyXmlToBinary (loopState, inner);
+        juce::XmlElement outer ("VST3PluginState");
+        outer.createNewChildElement ("IComponent")->addTextElement (inner.toBase64Encoding());
+        juce::MemoryBlock blob;
+        juce::AudioProcessor::copyXmlToBinary (outer, blob);
+        plugin->setStateInformation (blob.getData(), (int) blob.getSize());
+
+        juce::AudioProcessorParameter* loopParam = nullptr;
+
+        for (auto* prm : plugin->getParameters())
+            if (prm->getName (32) == "Loop")
+                loopParam = prm;
+
+        CHECK (loopParam != nullptr);
+
+        auto notesPastTheEnd = [&] (bool looping)
+        {
+            if (loopParam != nullptr)
+                loopParam->setValueNotifyingHost (looping ? 1.0f : 0.0f);
+
+            playHead.playing = true;
+            playHead.bpm = loopComp.tempo;
+            const double startPpq = (double) loopComp.lengthTicks / pm::kPpq + 37.0; // well past the end
+            int ons = 0;
+
+            for (int b = 0; b < (int) (sampleRate * 4.0 / blockSize); ++b)
+            {
+                playHead.ppq = startPpq + (double) b * blockSize / sampleRate * (playHead.bpm / 60.0);
+                midi.clear();
+                buffer.clear();
+                plugin->processBlock (buffer, midi);
+
+                for (const auto meta : midi)
+                    ons += meta.getMessage().isNoteOn() ? 1 : 0;
+            }
+
+            return ons;
+        };
+
+        const int looped = notesPastTheEnd (true);
+        const int stopped = notesPastTheEnd (false);
+        std::printf ("  past the end: %d note-ons looping, %d without\n", looped, stopped);
+        CHECK (looped > 20);
+        CHECK (stopped == 0);
+    }
+
     plugin->releaseResources();
     plugin.reset();
 

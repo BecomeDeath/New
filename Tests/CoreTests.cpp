@@ -3,7 +3,9 @@
 #include "Composer.h"
 #include "MidiFileWriter.h"
 #include "PromptInterpreter.h"
+#include "QualityCheck.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -341,7 +343,8 @@ static void testComposer()
     CHECK_EQ (a.noteCount(), b.noteCount());
     CHECK (writeMidiFile (a) == writeMidiFile (b));   // deterministic
     CHECK (writeMidiFile (a) != writeMidiFile (c));   // seeds vary the result
-    CHECK_EQ (a.lengthTicks, spec.bars * 4 * kPpq);
+    CHECK_EQ (a.lengthTicks, a.bars * 4 * kPpq);
+    CHECK (a.bars >= spec.bars);   // orchestral prompts compose a whole cue
 
     // Melody: strong beats should mostly land on chord tones, and the piece ends on the tonic.
     for (auto& t : a.tracks)
@@ -405,21 +408,34 @@ static void testPartsFollowTheHarmony()
 
             for (auto& t : comp.tracks)
             {
-                if (t.role != Role::Chords && t.role != Role::Pad)
+                // Songs: the chord and pad parts. Cues reassign every section passage by passage,
+                // so there the held and struck chord notes are checked, whoever plays them.
+                const bool songPart = ! spec.orchestral && (t.role == Role::Chords || t.role == Role::Pad);
+
+                if (t.isDrum || (! songPart && ! spec.orchestral))
                     continue;
 
                 int wrong = 0, total = 0;
 
                 for (auto& n : t.notes)
                 {
+                    const bool chordal = n.articulation == Articulation::Sustain || n.articulation == Articulation::Tremolo
+                                      || n.articulation == Articulation::Marcato || n.articulation == Articulation::Pizzicato
+                                      || n.articulation == Articulation::Staccato;
+
+                    if (spec.orchestral && ! chordal)
+                        continue;
+
                     for (auto& slot : comp.chords)
                     {
                         if (n.start + 40 >= slot.start && n.start + 40 < slot.end)
                         {
                             Chord ch;
                             parseChordSymbol (slot.name, 0, Mode::Major, ch);
+                            const bool inChord = slot.pcs.empty() ? ch.containsPc (n.pitch)
+                                               : std::find (slot.pcs.begin(), slot.pcs.end(), wrapPc (n.pitch)) != slot.pcs.end();
                             ++total;
-                            wrong += ch.containsPc (n.pitch) ? 0 : 1;
+                            wrong += (inChord || wrapPc (n.pitch) == slot.bassPc) ? 0 : 1;
                             break;
                         }
                     }
@@ -496,6 +512,326 @@ static void testThemeAndHandWrittenSpec()
     CHECK (c.tracks[3].notes.front().start >= 2 * 4 * kPpq - 20); // drums enter at bar 3
 }
 
+
+//==============================================================================
+// Orchestral cues
+
+struct MidiStats
+{
+    int tracks = 0, noteOns = 0, keyswitches = 0, cc32 = 0, markers = 0, cues = 0;
+    std::vector<std::string> markerTexts;
+};
+
+static MidiStats scanMidi (const std::vector<uint8_t>& d)
+{
+    MidiStats st;
+    size_t pos = 14;
+
+    while (pos + 8 <= d.size())
+    {
+        const uint32_t len = (uint32_t) d[pos + 4] << 24 | (uint32_t) d[pos + 5] << 16 | (uint32_t) d[pos + 6] << 8 | d[pos + 7];
+        size_t p = pos + 8;
+        const size_t end = p + len;
+        ++st.tracks;
+
+        while (p < end)
+        {
+            while (d[p] & 0x80) ++p;
+            ++p;
+            const uint8_t status = d[p++];
+
+            if (status == 0xFF)
+            {
+                const uint8_t type = d[p++];
+                uint32_t mlen = 0;
+
+                while (d[p] & 0x80) mlen = (mlen << 7) | (d[p++] & 0x7F);
+                mlen = (mlen << 7) | d[p++];
+
+                if (type == 0x06) { ++st.markers; st.markerTexts.push_back (std::string ((const char*) &d[p], mlen)); }
+                if (type == 0x07) ++st.cues;
+                p += mlen;
+            }
+            else if ((status & 0xF0) == 0xC0 || (status & 0xF0) == 0xD0)
+            {
+                p += 1;
+            }
+            else
+            {
+                if ((status & 0xF0) == 0x90 && d[p + 1] > 0)
+                {
+                    ++st.noteOns;
+                    st.keyswitches += d[p] < 20 ? 1 : 0;
+                }
+
+                if ((status & 0xF0) == 0xB0 && d[p] == 32)
+                    ++st.cc32;
+
+                p += 2;
+            }
+        }
+
+        pos = end;
+    }
+
+    return st;
+}
+
+static const char* orchestralPrompts[] = {
+    "Generate me a fantasy orchestral midi",
+    "Epic orchestral battle music for a boss fight",
+    "Heroic main theme for an adventure game",
+    "Dark fantasy orchestral theme for a villain",
+    "Sad emotional orchestral lament",
+    "Mysterious orchestral exploration music for ancient ruins",
+    "Tense orchestral stealth music",
+    "Peaceful orchestral village theme",
+    "Sci-fi space orchestral theme",
+    "Whimsical magical orchestral music",
+    "Fast orchestral action chase",
+    "Pirate orchestral adventure on the high seas",
+    "Celtic orchestral music for a highland journey",
+    "Japanese orchestral theme for a samurai duel",
+    "Romantic orchestral waltz for a royal ball",
+};
+
+static void testCueFormAndLength()
+{
+    std::printf ("cue form, length and loop points\n");
+
+    struct L { const char* length; double minSec, maxSec; };
+    const L lengths[] = { { "sketch", 15, 60 }, { "cue", 45, 100 }, { "full", 115, 190 }, { "extended", 180, 280 } };
+
+    for (auto* prompt : { orchestralPrompts[0], orchestralPrompts[1], orchestralPrompts[7] })
+    {
+        for (auto& l : lengths)
+        {
+            PromptOverrides o;
+            o.length = l.length;
+            const auto spec = interpretPrompt (prompt, 7, o);
+            CHECK (spec.orchestral);
+            const auto c = compose (spec, 7);
+            checkComposition (c, std::string (prompt) + " / " + l.length);
+
+            const double sec = c.seconds();
+
+            if (sec < l.minSec || sec > l.maxSec)
+                std::printf ("  %s / %s: %.0f s\n", prompt, l.length, sec);
+
+            CHECK (sec >= l.minSec && sec <= l.maxSec);
+            CHECK (! c.form.empty());
+            CHECK (! c.markers.empty());
+            CHECK (std::is_sorted (c.markers.begin(), c.markers.end(), [] (const Marker& a, const Marker& b) { return a.tick < b.tick; }));
+
+            if (std::string (l.length) != "sketch")
+            {
+                // A real cue: intro, theme, development or contrast, climax and an ending.
+                CHECK (c.form.find ("Theme") != std::string::npos);
+                CHECK (c.form.find ("Climax") != std::string::npos);
+                CHECK (c.form.find ("Outro") != std::string::npos || c.form.find ("Stinger") != std::string::npos);
+            }
+
+            if (std::string (l.length) == "full" || std::string (l.length) == "extended")
+                CHECK (c.form.find ("Development") != std::string::npos && c.form.find ("Second Theme") != std::string::npos);
+
+            // Harmony is not one looped progression: many different chords, and cadences.
+            std::set<std::string> romans;
+
+            for (auto& ch : c.chords)
+                romans.insert (ch.roman);
+
+            CHECK (romans.size() >= (std::string (l.length) == "sketch" ? 4u : (std::string (l.length) == "cue" ? 6u : 7u)));
+        }
+    }
+
+    // Loops: an end stinger after the loop region, and loop markers / cue points in the file.
+    const auto loopSpec = interpretPrompt ("Epic orchestral battle loop for a boss fight", 3);
+    const auto loop = compose (loopSpec, 3);
+    CHECK (loop.loopStart >= 0 && loop.loopEnd > loop.loopStart && loop.loopEnd < loop.lengthTicks);
+    CHECK (loop.form.find ("Stinger") != std::string::npos);
+    CHECK_EQ (loop.loopStart % loop.ticksPerBar, 0);
+    CHECK_EQ (loop.loopEnd % loop.ticksPerBar, 0);
+
+    const auto stats = scanMidi (writeMidiFile (loop));
+    CHECK_EQ (stats.markers, (int) loop.markers.size());
+    CHECK_EQ (stats.cues, 2);
+    CHECK (std::find (stats.markerTexts.begin(), stats.markerTexts.end(), "Loop Start") != stats.markerTexts.end());
+}
+
+static void testCueQuality()
+{
+    std::printf ("every cue passes the quality check\n");
+
+    for (auto* prompt : orchestralPrompts)
+    {
+        for (uint64_t seed = 1; seed <= 3; ++seed)
+        {
+            const auto spec = interpretPrompt (prompt, seed);
+            const auto c = compose (spec, seed);
+            const auto q = checkQuality (c);
+
+            if (q.score < 8.5 || q.wrongChordNotes > 0 || q.outOfRange > 0 || q.strongClashPct >= 6.0 || q.lowMudPct >= 5.0)
+                std::printf ("  %s (seed %d): %.1f, %d wrong, %d out of range, %.1f%% clash, %.1f%% mud\n", prompt, (int) seed,
+                             q.score, q.wrongChordNotes, q.outOfRange, q.strongClashPct, q.lowMudPct);
+
+            CHECK (q.score >= 8.5);
+            CHECK_EQ (q.wrongChordNotes, 0);
+            CHECK_EQ (q.outOfRange, 0);
+            CHECK (q.strongClashPct < 6.0);   // syncopated passing tones in the tunes are allowed
+            CHECK (q.lowMudPct < 5.0);
+            CHECK (q.endsOnTonic);
+            CHECK (c.quality.candidates >= 1);
+            CHECK (std::abs (c.quality.score - q.score) < 1e-9);
+        }
+    }
+}
+
+static void testFullOrchestraAndArticulations()
+{
+    std::printf ("full orchestra, articulations and their export\n");
+
+    const auto spec = interpretPrompt ("Dark fantasy orchestral theme for a villain", 4);
+    const auto c = compose (spec, 4);
+
+    auto find = [&] (const char* name) -> const Track*
+    {
+        for (auto& t : c.tracks)
+            if (t.name == name)
+                return &t;
+
+        return nullptr;
+    };
+
+    for (auto* name : { "Violins I", "Violins II", "Violas", "Celli", "Basses", "Horns", "Trumpets", "Trombones", "Tuba", "Timpani", "Choir" })
+    {
+        if (find (name) == nullptr)
+            std::printf ("  missing %s\n", name);
+
+        CHECK (find (name) != nullptr);
+    }
+
+    // Score order: woodwinds and brass above the strings.
+    int horns = -1, violins = -1;
+
+    for (int i = 0; i < (int) c.tracks.size(); ++i)
+    {
+        if (c.tracks[(size_t) i].name == "Horns")     horns = i;
+        if (c.tracks[(size_t) i].name == "Violins I") violins = i;
+    }
+
+    CHECK (horns >= 0 && violins > horns);
+
+    // Orchestral percussion as separate instruments, not one drum kit.
+    int percussion = 0;
+
+    for (auto& t : c.tracks)
+        percussion += t.isDrum ? 1 : 0;
+
+    CHECK (percussion >= 3);
+
+    std::set<Articulation> used;
+    int splitParts = 0, splitNotes = 0;
+
+    for (auto& t : c.tracks)
+    {
+        for (auto& n : t.notes)
+            used.insert (n.articulation);
+
+        if (t.splitFrom >= 0)
+        {
+            ++splitParts;
+            splitNotes += (int) t.notes.size();
+            CHECK (t.splitFrom < (int) c.tracks.size() && c.tracks[(size_t) t.splitFrom].splitFrom < 0);
+        }
+    }
+
+    for (auto a : { Articulation::Legato, Articulation::Sustain, Articulation::Spiccato, Articulation::Marcato })
+        CHECK (used.count (a) > 0);
+
+    // General MIDI export: every note, one track per part.
+    const auto gm = scanMidi (writeMidiFile (c));
+    CHECK_EQ (gm.noteOns, c.noteCount());
+    CHECK_EQ (gm.tracks, (int) c.tracks.size() + 1);
+    CHECK_EQ (gm.keyswitches, 0);
+
+    // Keyswitches: split parts fold back into their sections, and switches are announced.
+    MidiExportOptions ks;
+    ks.articulations = ArticulationMap::keyswitchDefaults();
+    const auto k = scanMidi (writeMidiFile (c, -1, ks));
+    CHECK_EQ (k.tracks, (int) c.tracks.size() + 1 - splitParts);
+    CHECK (k.keyswitches > 0);
+    CHECK_EQ (k.noteOns - k.keyswitches, c.noteCount());
+
+    // UACC: CC32 values instead of notes.
+    MidiExportOptions cc;
+    cc.articulations = ArticulationMap::uaccDefaults();
+    const auto u = scanMidi (writeMidiFile (c, -1, cc));
+    CHECK (u.cc32 > 0);
+    CHECK_EQ (u.keyswitches, 0);
+    CHECK_EQ (u.noteOns, c.noteCount());
+    (void) splitNotes;
+}
+
+static void testThemeDevelopment()
+{
+    std::printf ("themes are developed, not just repeated\n");
+
+    const auto spec = interpretPrompt ("Heroic main theme for an adventure game", 5);
+    const auto c = compose (spec, 5);
+
+    // Different sections give the tune to different instruments.
+    std::set<std::string> leads;
+
+    for (size_t m = 0; m + 1 < c.markers.size(); ++m)
+    {
+        if (c.markers[m].text.rfind ("Loop", 0) == 0)
+            continue;
+
+        const int from = c.markers[m].tick, to = c.markers[m + 1].tick;
+        int best = -1, bestCount = 0;
+
+        for (int ti = 0; ti < (int) c.tracks.size(); ++ti)
+        {
+            int count = 0;
+
+            for (auto& n : c.tracks[(size_t) ti].notes)
+                count += (n.articulation == Articulation::Legato && n.start >= from && n.start < to) ? 1 : 0;
+
+            if (count > bestCount)
+            {
+                bestCount = count;
+                best = ti;
+            }
+        }
+
+        if (best >= 0)
+            leads.insert (c.tracks[(size_t) best].name);
+    }
+
+    CHECK (leads.size() >= 3);
+
+    // The restatement is reharmonised: its chords differ from the first statement's somewhere.
+    std::vector<std::string> first, second;
+    int themeTick = -1, againTick = -1, afterTick = -1;
+
+    for (size_t m = 0; m < c.markers.size(); ++m)
+    {
+        if (c.markers[m].text == "Theme")          themeTick = c.markers[m].tick;
+        if (c.markers[m].text == "Theme (tutti)")  againTick = c.markers[m].tick;
+        if (againTick >= 0 && afterTick < 0 && c.markers[m].tick > againTick) afterTick = c.markers[m].tick;
+    }
+
+    CHECK (themeTick >= 0 && againTick > themeTick);
+
+    for (auto& ch : c.chords)
+    {
+        if (ch.start >= themeTick && ch.start < againTick)  first.push_back (ch.roman);
+        if (ch.start >= againTick && ch.start < afterTick)  second.push_back (ch.roman);
+    }
+
+    CHECK (! first.empty() && ! second.empty() && first != second);
+}
+
 int main()
 {
     testChordParsing();
@@ -504,6 +840,10 @@ int main()
     testEveryStyleAndMeter();
     testPartsFollowTheHarmony();
     testThemeAndHandWrittenSpec();
+    testCueFormAndLength();
+    testCueQuality();
+    testFullOrchestraAndArticulations();
+    testThemeDevelopment();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

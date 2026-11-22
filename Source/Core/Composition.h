@@ -59,6 +59,7 @@ struct Track
     bool isDrum = false;
     std::vector<Note> notes;
     std::vector<ControlChange> controls;
+    int splitFrom = -1;   // for a "(pizz.)" / "(trem.)" part: the index of the section it was split from
 };
 
 struct ChordSlot

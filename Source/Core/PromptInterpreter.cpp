@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <map>
 #include <set>
 
 namespace pm
@@ -2018,8 +2019,30 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
         if (hasWord ("cue") || hasWord ("1 minute") || hasWord ("one minute"))     spec.length = "cue";
         if (hasWord ("full") || hasWord ("complete") || hasWord ("full length"))   spec.length = "full";
         if (hasWord ("long") || hasWord ("extended") || hasWord ("epic length"))   spec.length = "extended";
-        if (explicitBars > 0 || explicitSeconds > 0.0)                             spec.length = "bars";
+        if (explicitBars > 0 || explicitSeconds > 0.0 || overrides.bars > 0)       spec.length = "bars";
         if (overrides.length.size() > 0)                                           spec.length = overrides.length;
+    }
+
+    if (spec.orchestral)
+    {
+        // A cue's length comes from its form, not the style's loop length.
+        for (auto& line : spec.interpretation)
+        {
+            if (line.rfind ("Tempo: ", 0) == 0)
+            {
+                const auto comma = line.find (", ");
+                const auto meter = line.rfind (" in ");
+                static const std::map<std::string, std::string> names {
+                    { "sketch", "a 16-bar sketch" }, { "cue", "a cue of about a minute" }, { "full", "a full cue of about 2.5 minutes" },
+                    { "extended", "an extended cue of about 4 minutes" }, { "auto", "a full cue" } };
+                const auto it = names.find (spec.length);
+                const std::string what = spec.length == "bars" ? "a cue of about " + std::to_string (spec.bars) + " bars"
+                                                               : (it != names.end() ? it->second : "a full cue");
+
+                if (comma != std::string::npos && meter != std::string::npos && meter > comma)
+                    line = line.substr (0, comma) + ", " + what + line.substr (meter);
+            }
+        }
     }
 
     spec.title = makeTitle (tokens, titleSkip, style->name);

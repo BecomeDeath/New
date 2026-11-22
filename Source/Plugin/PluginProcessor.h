@@ -57,13 +57,14 @@ public:
     enum class Engine { Offline, Claude };
     enum class Status { Idle, Working, Error };
 
-    /** Overrides from the editor's Key / Scale / Tempo / Bars controls (-1 / 0 = auto). */
+    /** Overrides from the editor's Key / Scale / Tempo / Bars / Length controls (-1 / 0 / "" = auto). */
     struct Controls
     {
         int keyRoot = -1;
         int mode = -1;
         int tempo = 0;
         int bars = 0;
+        juce::String length;   // orchestral cues: sketch | cue | full | extended
     };
 
     void generate (const juce::String& prompt);
@@ -90,7 +91,8 @@ public:
 
     void setTrackMuted (int index, bool muted);
     bool isTrackMuted (int index) const;
-    uint32_t getMutedMask() const                            { return mutedMask.load(); }
+    uint64_t getMutedMask() const                            { return mutedMask.load(); }
+    static constexpr int maxMutableTracks = 64;
 
     juce::String suggestedFileName (int trackIndex = -1) const;
     bool writeMidiFile (const juce::File&, int trackIndex = -1) const;
@@ -119,6 +121,8 @@ private:
         std::array<int, 16> programs {};
         int lengthTicks = 0;
         int tempo = 120;
+        int loopStart = 0;    // the region that repeats when looping (intro plays once, the end stinger is skipped)
+        int loopEnd = 0;
     };
 
     void applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed);
@@ -153,7 +157,7 @@ private:
     std::shared_ptr<const PlaybackData> activePlayback;
     std::vector<std::shared_ptr<const PlaybackData>> retired;
 
-    std::atomic<uint32_t> mutedMask { 0 };
+    std::atomic<uint64_t> mutedMask { 0 };
     std::atomic<bool> previewPlaying { false };
     std::atomic<bool> previewRestart { false };
     std::atomic<double> playheadTick { -1.0 };

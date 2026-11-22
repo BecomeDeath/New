@@ -34,7 +34,7 @@ void PianoRoll::setSelectedTrack (int index)
     }
 }
 
-void PianoRoll::setMutedMask (uint32_t mask)
+void PianoRoll::setMutedMask (uint64_t mask)
 {
     if (mask != mutedMask)
     {
@@ -72,6 +72,23 @@ bool PianoRoll::hasDrums() const
 
 juce::Rectangle<int> PianoRoll::chordLane() const  { return getLocalBounds().removeFromTop (24); }
 
+bool PianoRoll::hasSections() const
+{
+    if (comp == nullptr)
+        return false;
+
+    for (auto& m : comp->markers)
+        if (m.text.rfind ("Loop", 0) != 0)
+            return true;
+
+    return false;
+}
+
+juce::Rectangle<int> PianoRoll::sectionLane() const
+{
+    return hasSections() ? getLocalBounds().withTrimmedTop (24).removeFromTop (20) : juce::Rectangle<int>();
+}
+
 juce::Rectangle<int> PianoRoll::drumLane() const
 {
     return hasDrums() ? getLocalBounds().removeFromBottom (40) : juce::Rectangle<int>();
@@ -81,6 +98,9 @@ juce::Rectangle<int> PianoRoll::noteArea() const
 {
     auto r = getLocalBounds();
     r.removeFromTop (24);
+
+    if (hasSections())
+        r.removeFromTop (20);
 
     if (hasDrums())
         r.removeFromBottom (40);
@@ -182,6 +202,53 @@ void PianoRoll::rebuildCache()
                 g.setColour (Theme::text.withAlpha (0.9f));
                 g.drawText (juce::String::fromUTF8 (c.name.c_str()), box.toNearestInt().reduced (4, 0), juce::Justification::centredLeft, true);
             }
+        }
+    }
+
+    // Form: section bands, and the loop region a game engine repeats.
+    if (hasSections())
+    {
+        const auto lane = sectionLane();
+        g.setColour (Theme::panelDark.darker (0.15f));
+        g.fillRect (lane);
+
+        std::vector<const pm::Marker*> sections;
+
+        for (auto& m : comp->markers)
+            if (m.text.rfind ("Loop", 0) != 0)
+                sections.push_back (&m);
+
+        g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+
+        for (size_t i = 0; i < sections.size(); ++i)
+        {
+            const float x0 = xFor (sections[i]->tick);
+            const float x1 = i + 1 < sections.size() ? xFor (sections[i + 1]->tick) : (float) w;
+            auto band = juce::Rectangle<float> (x0, (float) lane.getY() + 2.0f, juce::jmax (1.0f, x1 - x0 - 1.0f), (float) lane.getHeight() - 4.0f);
+            g.setColour (Theme::accentHot.withAlpha (i % 2 == 0 ? 0.18f : 0.10f));
+            g.fillRect (band);
+
+            g.setColour (Theme::grid.brighter (0.6f));
+            g.drawVerticalLine ((int) x0, (float) lane.getY(), (float) h);
+
+            if (band.getWidth() > 28.0f)
+            {
+                g.setColour (Theme::text.withAlpha (0.85f));
+                g.drawText (juce::String::fromUTF8 (sections[i]->text.c_str()), band.toNearestInt().reduced (4, 0),
+                            juce::Justification::centredLeft, true);
+            }
+        }
+
+        if (comp->loopStart >= 0 && comp->loopEnd > comp->loopStart)
+        {
+            const float x0 = xFor (comp->loopStart), x1 = xFor (comp->loopEnd);
+            g.setColour (Theme::ok.withAlpha (0.07f));
+            g.fillRect (juce::Rectangle<float> (x0, (float) lane.getBottom(), x1 - x0, (float) (h - lane.getBottom())));
+            g.setColour (Theme::ok.withAlpha (0.8f));
+            g.fillRect (juce::Rectangle<float> (x0, (float) lane.getBottom() - 2.0f, x1 - x0, 2.0f));
+            g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+            g.drawText ("LOOP", juce::Rectangle<float> (x1 - 40.0f, (float) lane.getBottom(), 36.0f, 14.0f).toNearestInt(),
+                        juce::Justification::centredRight);
         }
     }
 

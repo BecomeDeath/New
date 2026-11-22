@@ -75,7 +75,7 @@ private:
     int selected = -1;
 };
 
-/** Claude settings shown in a call-out: API key, model, effort. */
+/** Settings shown in a call-out: Claude (API key, model, effort) and MIDI export articulations. */
 class SettingsPanel : public juce::Component
 {
 public:
@@ -89,6 +89,10 @@ private:
     juce::Label heading, keyLabel, modelLabel, effortLabel, note;
     juce::TextEditor keyEditor, modelEditor;
     juce::ComboBox effortBox;
+    juce::Label exportHeading, articulationLabel, valuesLabel, controllerLabel, exportNote;
+    juce::ComboBox articulationBox;
+    juce::TextEditor valuesEditor, controllerEditor;
+    juce::String articulationOutputFor (int id) const;
     juce::TextButton saveButton { "Save" }, clearButton { "Remove key" };
 };
 
@@ -125,13 +129,13 @@ private:
     juce::OwnedArray<juce::TextButton> chips;
     juce::StringArray chipPrompts;
 
-    juce::Label keyLabel, scaleLabel, tempoLabel, barsLabel, seedLabel;
-    juce::ComboBox keyBox, scaleBox, barsBox;
+    juce::Label keyLabel, scaleLabel, tempoLabel, barsLabel, lengthLabel, seedLabel;
+    juce::ComboBox keyBox, scaleBox, barsBox, lengthBox;
     juce::Slider tempoSlider;
     juce::Label seedValue;
     juce::ToggleButton lockSeedButton { "Lock" };
 
-    juce::Label titleLabel, summaryLabel, interpretationLabel, statusLabel;
+    juce::Label titleLabel, summaryLabel, interpretationLabel, statusLabel, qualityLabel;
     TrackList trackList;
     PianoRoll pianoRoll;
 

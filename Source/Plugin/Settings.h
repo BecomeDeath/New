@@ -2,6 +2,8 @@
 
 #include <juce_data_structures/juce_data_structures.h>
 
+#include "MidiFileWriter.h"
+
 /** Per-user settings shared by every PromptMIDI instance (API key, model, effort).
 
     Deliberately NOT stored in the plug-in state, so the API key never ends up inside a
@@ -22,6 +24,24 @@ public:
 
     juce::String getEffort() const;
     void setEffort (const juce::String&);
+
+    /** How exported MIDI carries articulations: "none" (General MIDI), "keyswitch" or "cc". */
+    juce::String getArticulationOutput() const;
+    void setArticulationOutput (const juce::String&);
+
+    /** Eight numbers in the order sustain, legato, staccato, spiccato, marcato, pizzicato,
+        tremolo, trill (keyswitch notes or controller values; -1 = not sent). Empty = defaults. */
+    juce::String getArticulationValues() const;
+    void setArticulationValues (const juce::String&);
+
+    int getArticulationController() const;
+    void setArticulationController (int);
+
+    /** The export map built from the three settings above. */
+    pm::ArticulationMap getArticulationMap() const;
+
+    /** The values text for a mode's defaults ("keyswitch" or "cc"). */
+    static juce::String defaultArticulationValues (const juce::String& output);
 
     juce::File getFile() const;
 

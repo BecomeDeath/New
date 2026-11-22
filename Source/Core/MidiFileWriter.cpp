@@ -87,13 +87,50 @@ namespace
     }
 }
 
-std::vector<uint8_t> writeMidiFile (const Composition& comp, int onlyTrack)
+ArticulationMap ArticulationMap::keyswitchDefaults()
 {
+    ArticulationMap m;
+    m.output = ArticulationOutput::Keyswitches;
+    //          Default Legato Sustain Staccato Spiccato Marcato Pizz Trem Trill
+    m.values = { 12,     13,    12,     14,      15,      16,     17,  18,  19 };
+    return m;
+}
+
+ArticulationMap ArticulationMap::uaccDefaults()
+{
+    ArticulationMap m;
+    m.output = ArticulationOutput::Controller;
+    m.controller = 32;
+    m.values = { 1, 20, 1, 40, 42, 52, 56, 11, 71 };
+    return m;
+}
+
+bool usesArticulations (const Track& t)
+{
+    if (t.isDrum)
+        return false;
+
+    const int p = t.program;
+    return (p >= 40 && p <= 45) || (p >= 48 && p <= 51) || (p >= 56 && p <= 79);
+}
+
+std::vector<uint8_t> writeMidiFile (const Composition& comp, int onlyTrack, const MidiExportOptions& options)
+{
+    const auto& map = options.articulations;
+    const bool switching = map.output != ArticulationOutput::None;
     std::vector<int> trackIndices;
 
     for (int i = 0; i < (int) comp.tracks.size(); ++i)
+    {
+        const auto& t = comp.tracks[(size_t) i];
+
+        // Split parts travel inside their section when the library switches articulations.
+        if (switching && t.splitFrom >= 0 && t.splitFrom < (int) comp.tracks.size() && onlyTrack != i)
+            continue;
+
         if (onlyTrack < 0 || onlyTrack == i)
             trackIndices.push_back (i);
+    }
 
     std::vector<uint8_t> file { 'M', 'T', 'h', 'd' };
     putBE32 (file, 6);
@@ -119,6 +156,19 @@ std::vector<uint8_t> writeMidiFile (const Composition& comp, int onlyTrack)
                         || comp.mode == Mode::MelodicMinor || comp.mode == Mode::PentatonicMinor;
         ev.push_back ({ 0, 0, { 0xFF, 0x59, 0x02, (uint8_t) (int8_t) sf, (uint8_t) (minor ? 1 : 0) } });
 
+        if (options.markers)
+        {
+            for (auto& m : comp.markers)
+                ev.push_back ({ m.tick, 0, metaText (0x06, m.text) });
+
+            // Loop points also as cue points, which game audio tools read.
+            if (comp.loopStart >= 0 && comp.loopEnd > comp.loopStart)
+            {
+                ev.push_back ({ comp.loopStart, 0, metaText (0x07, "loopStart") });
+                ev.push_back ({ comp.loopEnd, 0, metaText (0x07, "loopEnd") });
+            }
+        }
+
         writeTrackChunk (file, ev, endTick);
     }
 
@@ -137,7 +187,60 @@ std::vector<uint8_t> writeMidiFile (const Composition& comp, int onlyTrack)
         for (auto& c : t.controls)
             ev.push_back ({ c.tick, 2, { (uint8_t) (0xB0 | ch), (uint8_t) (c.controller & 0x7F), (uint8_t) (c.value & 0x7F) } });
 
-        for (auto& n : t.notes)
+        std::vector<Note> notes = t.notes;
+        const bool articulate = switching && usesArticulations (t);
+
+        if (switching && onlyTrack < 0)
+        {
+            for (auto& other : comp.tracks)
+                if (other.splitFrom == idx)
+                    notes.insert (notes.end(), other.notes.begin(), other.notes.end());
+
+            std::stable_sort (notes.begin(), notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+
+            // Folded-in parts must not hold a pitch the section strikes again.
+            for (size_t i = 0; i < notes.size(); ++i)
+                for (size_t j = i + 1; j < notes.size() && notes[j].start < notes[i].start + notes[i].length; ++j)
+                    if (notes[j].pitch == notes[i].pitch && notes[j].start > notes[i].start)
+                        notes[i].length = std::max (1, notes[j].start - notes[i].start);
+        }
+
+        if (articulate)
+        {
+            // Announce each change of articulation just before the notes it applies to.
+            int current = -2;
+            int lastSwitch = -1000000;
+
+            for (auto& n : notes)
+            {
+                Articulation a = n.articulation;
+
+                if (a == Articulation::Default)
+                    a = Articulation::Sustain;
+
+                const int value = map.valueFor (a);
+
+                if (value < 0 || value == current)
+                    continue;
+
+                const int at = std::max ({ 0, n.start - map.leadTicks, lastSwitch + 1 });
+
+                if (map.output == ArticulationOutput::Keyswitches)
+                {
+                    ev.push_back ({ at, 2, { (uint8_t) (0x90 | ch), (uint8_t) (value & 0x7F), 100 } });
+                    ev.push_back ({ std::min (at + 6, std::max (at + 1, n.start)), 2, { (uint8_t) (0x80 | ch), (uint8_t) (value & 0x7F), 64 } });
+                }
+                else
+                {
+                    ev.push_back ({ at, 2, { (uint8_t) (0xB0 | ch), (uint8_t) (map.controller & 0x7F), (uint8_t) (value & 0x7F) } });
+                }
+
+                current = value;
+                lastSwitch = at;
+            }
+        }
+
+        for (auto& n : notes)
         {
             ev.push_back ({ n.start, 4, { (uint8_t) (0x90 | ch), (uint8_t) (n.pitch & 0x7F), (uint8_t) (std::max (1, n.velocity) & 0x7F) } });
             ev.push_back ({ n.start + n.length, 3, { (uint8_t) (0x80 | ch), (uint8_t) (n.pitch & 0x7F), 64 } });

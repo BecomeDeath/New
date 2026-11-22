@@ -93,6 +93,8 @@ int main()
         CHECK (schemaIsStrict (schema, "$"));
         CHECK (schema["properties"]["tracks"]["items"]["properties"]["pattern"]["enum"].size() > 30);
         CHECK (schema["properties"]["mode"]["enum"].size() == (int) pm::allModes().size());
+        CHECK (schema["properties"]["orchestral"]["type"].toString() == "boolean");
+        CHECK (schema["properties"]["length"]["enum"].size() == 6);
     }
 
     std::printf ("spec round trip\n");
@@ -108,16 +110,53 @@ int main()
         CHECK (back.keyRoot == spec.keyRoot && back.mode == spec.mode && back.tempo == spec.tempo && back.bars == spec.bars);
         CHECK (back.tsNum == spec.tsNum && back.tsDen == spec.tsDen && back.progression == spec.progression);
         CHECK (back.progressionB == spec.progressionB && back.finalLift == spec.finalLift);
+        CHECK (back.orchestral == spec.orchestral && back.length == spec.length);
         CHECK (pm::writeMidiFile (pm::compose (back, 5)) == pm::writeMidiFile (pm::compose (spec, 5)));
     }
 
     std::printf ("composition round trip\n");
+    for (auto* prompt : { "epic trailer", "Dark fantasy orchestral villain theme", "orchestral battle loop", "lofi beat" })
     {
-        const auto comp = pm::compose (pm::interpretPrompt ("epic trailer", 3), 3);
+        const auto comp = pm::compose (pm::interpretPrompt (prompt, 3), 3);
         pm::Composition back;
         CHECK (SpecJson::compositionFromVar (juce::JSON::parse (juce::JSON::toString (SpecJson::compositionToVar (comp))), back));
         CHECK (pm::writeMidiFile (back) == pm::writeMidiFile (comp));
         CHECK (back.chords.size() == comp.chords.size());
+        CHECK (back.markers.size() == comp.markers.size() && back.loopStart == comp.loopStart && back.loopEnd == comp.loopEnd);
+        CHECK (back.form == comp.form && std::abs (back.quality.score - comp.quality.score) < 1e-6);
+        CHECK (back.quality.notesText == comp.quality.notesText);
+
+        // Articulations, chord tones, pedals and split parts survive a project save.
+        bool same = back.tracks.size() == comp.tracks.size();
+
+        for (size_t t = 0; same && t < comp.tracks.size(); ++t)
+        {
+            same = same && back.tracks[t].splitFrom == comp.tracks[t].splitFrom && back.tracks[t].notes.size() == comp.tracks[t].notes.size();
+
+            for (size_t n = 0; same && n < comp.tracks[t].notes.size(); ++n)
+                same = same && back.tracks[t].notes[n].articulation == comp.tracks[t].notes[n].articulation;
+        }
+
+        for (size_t c = 0; same && c < comp.chords.size(); ++c)
+            same = same && back.chords[c].pcs == comp.chords[c].pcs && back.chords[c].bassPc == comp.chords[c].bassPc;
+
+        CHECK (same);
+
+        pm::MidiExportOptions ks;
+        ks.articulations = pm::ArticulationMap::keyswitchDefaults();
+        CHECK (pm::writeMidiFile (back, -1, ks) == pm::writeMidiFile (comp, -1, ks));
+    }
+
+    std::printf ("older project states\n");
+    {
+        // Version-1 states stored four numbers per note and no cue data.
+        const auto old = juce::JSON::parse (R"({"title":"Old","tempo":100,"tsNum":4,"tsDen":4,"bars":1,"ticksPerBar":1920,
+            "lengthTicks":1920,"keyRoot":0,"mode":"major","chords":[[0,1920,"C","I"]],"progression":["I"],
+            "tracks":[{"name":"Piano","role":"melody","program":0,"channel":0,"isDrum":false,"notes":[0,480,60,90,480,480,64,90],"cc":[]}]})");
+        pm::Composition c;
+        CHECK (SpecJson::compositionFromVar (old, c));
+        CHECK (c.tracks.size() == 1 && c.tracks[0].notes.size() == 2 && c.tracks[0].notes[1].pitch == 64);
+        CHECK (c.tracks[0].notes[0].articulation == pm::Articulation::Default && c.loopStart == -1 && c.markers.empty());
     }
 
     std::printf ("request body\n");
@@ -133,6 +172,7 @@ int main()
         CHECK (! body.hasProperty ("temperature") && ! body.hasProperty ("thinking"));
         CHECK (body["messages"][0]["content"].toString().contains ("soft piano"));
         CHECK (body["messages"][0]["content"].toString().contains ("key D, 16 bars"));
+        CHECK (body["system"].toString().contains ("orchestral") && body["system"].toString().contains ("Violins I"));
         CHECK (Claude::buildHeaders (o).contains ("anthropic-version: 2026-10-21"));
         CHECK (Claude::buildHeaders (o).contains ("anthropic-beta: server-side-fallback-2026-07-01"));
 
@@ -165,6 +205,31 @@ int main()
         CHECK (r.spec.theme.size() == 2);
         CHECK (r.spec.progressionB.size() == 4 && r.spec.finalLift == 2);
         CHECK (pm::compose (r.spec, 1).noteCount() > 0);
+        CHECK (! r.spec.orchestral && r.spec.length == "auto");
+
+        // An orchestral plan from Claude becomes a full cue.
+        const juce::String cuePlan = R"({
+            "title": "Siege of Emberfall", "key": "D", "mode": "minor", "tempo": 132, "timeSignature": "4/4", "bars": 16,
+            "orchestral": true, "length": "cue",
+            "progression": ["i", "VI", "III", "VII"], "progressionB": [], "finalKeyChange": 2,
+            "chordsPerBar": 1, "swing": 0, "swingSixteenths": false,
+            "energy": 0.85, "complexity": 0.2, "humanize": 0.3, "dynamics": "build", "ending": "loop", "theme": [],
+            "tracks": [
+              {"name": "Horns", "role": "melody", "program": 60, "lowNote": 41, "highNote": 77, "density": 0.45, "velocity": 98, "entryBar": 0, "pattern": "lyrical"},
+              {"name": "Trombones", "role": "chords", "program": 57, "lowNote": 40, "highNote": 70, "density": 0.4, "velocity": 94, "entryBar": 0, "pattern": "block"},
+              {"name": "Timpani", "role": "bass", "program": 47, "lowNote": 38, "highNote": 57, "density": 0.5, "velocity": 98, "entryBar": 0, "pattern": "timpani"},
+              {"name": "Taiko Ensemble", "role": "percussion", "program": 0, "lowNote": 35, "highNote": 81, "density": 0.6, "velocity": 104, "entryBar": 0, "pattern": "tribal"},
+              {"name": "Violins I", "role": "pad", "program": 48, "lowNote": 55, "highNote": 96, "density": 0.3, "velocity": 84, "entryBar": 0, "pattern": "sustain"},
+              {"name": "Violas", "role": "ostinato", "program": 48, "lowNote": 48, "highNote": 79, "density": 0.7, "velocity": 80, "entryBar": 0, "pattern": "epic"},
+              {"name": "Celli", "role": "pad", "program": 48, "lowNote": 36, "highNote": 72, "density": 0.3, "velocity": 82, "entryBar": 0, "pattern": "sustain"},
+              {"name": "Basses", "role": "bass", "program": 43, "lowNote": 28, "highNote": 55, "density": 0.3, "velocity": 84, "entryBar": 0, "pattern": "sustain"}
+            ] })";
+
+        const auto cue = Claude::parseResponse (200, successBody (cuePlan));
+        CHECK (cue.ok && cue.spec.orchestral && cue.spec.length == "cue" && ! cue.spec.resolveEnding);
+        const auto cueComp = pm::compose (cue.spec, 2);
+        CHECK (cueComp.seconds() > 40.0 && cueComp.loopEnd > cueComp.loopStart && ! cueComp.form.empty());
+        CHECK (cueComp.quality.score >= 8.0);
 
         juce::DynamicObject::Ptr refusal = new juce::DynamicObject();
         refusal->setProperty ("type", "message");

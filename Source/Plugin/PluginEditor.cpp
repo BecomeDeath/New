@@ -276,6 +276,9 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
         settings.setApiKey (keyEditor.getText());
         settings.setModel (modelEditor.getText().trim().isEmpty() ? juce::String (Settings::defaultModel) : modelEditor.getText());
         settings.setEffort (effortBox.getSelectedId() == 1 ? "low" : (effortBox.getSelectedId() == 3 ? "high" : "medium"));
+        settings.setArticulationOutput (articulationOutputFor (articulationBox.getSelectedId()));
+        settings.setArticulationValues (valuesEditor.getText());
+        settings.setArticulationController (controllerEditor.getText().getIntValue());
 
         if (onSaved)
             onSaved();
@@ -286,11 +289,67 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
 
     clearButton.onClick = [this] { keyEditor.clear(); };
 
+    // MIDI export: how articulations reach the sample library.
+    styleLabel (exportHeading, 16.0f, Theme::text, true);
+    exportHeading.setText ("MIDI export", juce::dontSendNotification);
+
+    for (auto* l : { &articulationLabel, &valuesLabel, &controllerLabel })
+        styleLabel (*l, 13.0f, Theme::textDim);
+
+    articulationLabel.setText ("Articulations", juce::dontSendNotification);
+    valuesLabel.setText ("Sustain  Legato  Stacc.  Spicc.  Marc.  Pizz.  Trem.  Trill", juce::dontSendNotification);
+    controllerLabel.setText ("CC#", juce::dontSendNotification);
+
+    articulationBox.addItem ("General MIDI (pizz. / trem. on their own tracks)", 1);
+    articulationBox.addItem ("Keyswitch notes", 2);
+    articulationBox.addItem ("Controller (Spitfire UACC = CC32)", 3);
+
+    const auto output = settings.getArticulationOutput();
+    articulationBox.setSelectedId (output == "keyswitch" ? 2 : (output == "cc" ? 3 : 1), juce::dontSendNotification);
+
+    valuesEditor.setFont (font (14.0f));
+    controllerEditor.setFont (font (14.0f));
+    controllerEditor.setInputRestrictions (3, "0123456789");
+    controllerEditor.setText (juce::String (settings.getArticulationController()), false);
+
+    auto refreshValues = [this] (bool resetToDefaults)
+    {
+        const auto out = articulationOutputFor (articulationBox.getSelectedId());
+        const bool on = out != "none";
+        valuesEditor.setEnabled (on);
+        controllerEditor.setEnabled (out == "cc");
+
+        if (! on)
+            valuesEditor.setText ({}, false);
+        else if (resetToDefaults || valuesEditor.isEmpty())
+            valuesEditor.setText (Settings::defaultArticulationValues (out), false);
+    };
+
+    if (output != "none" && settings.getArticulationValues().isNotEmpty())
+        valuesEditor.setText (settings.getArticulationValues(), false);
+
+    refreshValues (false);
+    articulationBox.onChange = [this, refreshValues] { refreshValues (true); };
+
+    styleLabel (exportNote, 12.0f, Theme::textDim);
+    exportNote.setJustificationType (juce::Justification::topLeft);
+    exportNote.setText ("Keyswitch notes default to C-1 upwards (MIDI 12-19); UACC values follow Spitfire's chart. "
+                        "Check your library's articulation list and edit the numbers to match (-1 = don't send). "
+                        "Exported and dragged MIDI then keeps each section on one track.",
+                        juce::dontSendNotification);
+
     for (auto* c : std::initializer_list<juce::Component*> { &heading, &keyLabel, &modelLabel, &effortLabel, &note,
-                                                             &keyEditor, &modelEditor, &effortBox, &saveButton, &clearButton })
+                                                             &keyEditor, &modelEditor, &effortBox, &saveButton, &clearButton,
+                                                             &exportHeading, &articulationLabel, &valuesLabel, &controllerLabel,
+                                                             &exportNote, &articulationBox, &valuesEditor, &controllerEditor })
         addAndMakeVisible (c);
 
-    setSize (460, 330);
+    setSize (500, 560);
+}
+
+juce::String SettingsPanel::articulationOutputFor (int id) const
+{
+    return id == 2 ? juce::String ("keyswitch") : (id == 3 ? juce::String ("cc") : juce::String ("none"));
 }
 
 void SettingsPanel::paint (juce::Graphics& g)
@@ -322,6 +381,25 @@ void SettingsPanel::resized()
 
     saveButton.setBounds (r.removeFromBottom (32).removeFromRight (110));
     r.removeFromBottom (6);
+
+    // MIDI export, from the bottom up
+    auto exp = r.removeFromBottom (210);
+    exportHeading.setBounds (exp.removeFromTop (26));
+    exp.removeFromTop (4);
+    articulationLabel.setBounds (exp.removeFromTop (20));
+    articulationBox.setBounds (exp.removeFromTop (28));
+    exp.removeFromTop (8);
+    auto labels = exp.removeFromTop (20);
+    controllerLabel.setBounds (labels.removeFromRight (60));
+    valuesLabel.setBounds (labels);
+    auto values = exp.removeFromTop (28);
+    controllerEditor.setBounds (values.removeFromRight (60));
+    values.removeFromRight (8);
+    valuesEditor.setBounds (values);
+    exp.removeFromTop (6);
+    exportNote.setBounds (exp);
+
+    r.removeFromBottom (8);
     note.setBounds (r);
 }
 
@@ -400,7 +478,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     }
 
     // Controls
-    for (auto* l : { &keyLabel, &scaleLabel, &tempoLabel, &barsLabel, &seedLabel })
+    for (auto* l : { &keyLabel, &scaleLabel, &tempoLabel, &barsLabel, &lengthLabel, &seedLabel })
     {
         styleLabel (*l, 12.5f, Theme::textDim);
         l->setJustificationType (juce::Justification::centredRight);
@@ -411,6 +489,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     scaleLabel.setText ("Scale", juce::dontSendNotification);
     tempoLabel.setText ("Tempo", juce::dontSendNotification);
     barsLabel.setText ("Bars", juce::dontSendNotification);
+    lengthLabel.setText ("Length", juce::dontSendNotification);
     seedLabel.setText ("Seed", juce::dontSendNotification);
 
     keyBox.addItem ("Auto", 1);
@@ -425,8 +504,16 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
 
     barsBox.addItem ("Auto", 1);
 
-    for (int b : { 4, 8, 12, 16, 24, 32, 48, 64 })
+    for (int b : { 4, 8, 12, 16, 24, 32, 48, 64, 96, 128 })
         barsBox.addItem (juce::String (b), b + 1);
+
+    lengthBox.addItem ("Auto", 1);
+    lengthBox.addItem ("Sketch (16 bars)", 2);
+    lengthBox.addItem ("Cue (~1 min)", 3);
+    lengthBox.addItem ("Full (~2.5 min)", 4);
+    lengthBox.addItem ("Extended (~4 min)", 5);
+    lengthBox.setTooltip ("Length of orchestral cues: a sketch, or a complete cue with intro, theme, development, build, "
+                          "climax and outro (or end stinger and loop points when the prompt asks for a loop)");
 
     tempoSlider.setSliderStyle (juce::Slider::LinearBar);
     tempoSlider.setRange (39.0, 220.0, 1.0);
@@ -437,7 +524,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     tempoSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     tempoSlider.updateText();
 
-    for (auto* box : { &keyBox, &scaleBox, &barsBox })
+    for (auto* box : { &keyBox, &scaleBox, &barsBox, &lengthBox })
     {
         box->setSelectedId (1, juce::dontSendNotification);
         box->onChange = [this] { pushControls(); };
@@ -476,8 +563,10 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     styleLabel (interpretationLabel, 12.0f, Theme::textDim);
     styleLabel (statusLabel, 12.5f, Theme::textDim);
     statusLabel.setJustificationType (juce::Justification::centredRight);
+    styleLabel (qualityLabel, 12.5f, Theme::ok);
+    qualityLabel.setJustificationType (juce::Justification::centredRight);
 
-    for (auto* l : { &titleLabel, &summaryLabel, &interpretationLabel, &statusLabel })
+    for (auto* l : { &titleLabel, &summaryLabel, &interpretationLabel, &statusLabel, &qualityLabel })
         addAndMakeVisible (l);
 
     trackList.onSelectionChanged = [this] (int index) { pianoRoll.setSelectedTrack (index); };
@@ -490,7 +579,8 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     playButton.setTooltip ("Preview the result. While the host is playing (and Follow host is on) playback follows the host instead.");
     addAndMakeVisible (playButton);
 
-    loopToggle.setTooltip ("Loop the piece during playback");
+    loopToggle.setTooltip ("Loop during playback. Cues with loop points play the intro once, then repeat the loop region "
+                           "(green in the piano roll), the way a game engine plays them");
     syncToggle.setTooltip ("Play in time with the host's transport, starting from bar 1 of the project");
     soundToggle.setTooltip ("Hear the result through PromptMIDI's built-in sketch synth");
     midiOutToggle.setTooltip ("Send the notes out as MIDI, to drive instruments in your DAW");
@@ -518,8 +608,8 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     processor.addChangeListener (this);
 
     setResizable (true, true);
-    setResizeLimits (860, 600, 2000, 1400);
-    setSize (1040, 720);
+    setResizeLimits (1000, 620, 2400, 1500);
+    setSize (1100, 740);
 
     refreshFromProcessor();
     startTimerHz (30);
@@ -604,27 +694,36 @@ void PromptMidiEditor::resized()
     // Overrides
     r.removeFromTop (12);
     auto controlsRow = r.removeFromTop (30);
+
+    // The boxes share whatever width there is beyond the labels and gaps (up to their natural size).
+    const int fixedWidth = (30 + 40 + 46 + 34 + 46 + 36) + 6 * 18 + 64;
+    const int naturalBoxes = 72 + 150 + 124 + 70 + 142 + 96;
+    const double boxScale = juce::jlimit (0.6, 1.0, (double) (controlsRow.getWidth() - fixedWidth) / naturalBoxes);
+
     auto place = [&] (juce::Component& label, juce::Component& comp, int labelW, int compW)
     {
         label.setBounds (controlsRow.removeFromLeft (labelW));
         controlsRow.removeFromLeft (6);
-        comp.setBounds (controlsRow.removeFromLeft (compW));
+        comp.setBounds (controlsRow.removeFromLeft ((int) (compW * boxScale)));
         controlsRow.removeFromLeft (12);
     };
 
-    place (keyLabel, keyBox, 30, 78);
-    place (scaleLabel, scaleBox, 40, 160);
-    place (tempoLabel, tempoSlider, 46, 150);
-    place (barsLabel, barsBox, 34, 78);
-    place (seedLabel, seedValue, 36, 104);
-    lockSeedButton.setBounds (controlsRow.removeFromLeft (70));
+    place (keyLabel, keyBox, 30, 72);
+    place (scaleLabel, scaleBox, 40, 150);
+    place (tempoLabel, tempoSlider, 46, 124);
+    place (barsLabel, barsBox, 34, 70);
+    place (lengthLabel, lengthBox, 46, 142);
+    place (seedLabel, seedValue, 36, 96);
+    lockSeedButton.setBounds (controlsRow.removeFromLeft (64));
 
     // Info
     r.removeFromTop (12);
     auto line1 = r.removeFromTop (26);
     statusLabel.setBounds (line1.removeFromRight (line1.getWidth() / 2));
     titleLabel.setBounds (line1);
-    summaryLabel.setBounds (r.removeFromTop (20));
+    auto line2 = r.removeFromTop (20);
+    qualityLabel.setBounds (line2.removeFromRight (juce::jmin (420, line2.getWidth() / 2)));
+    summaryLabel.setBounds (line2);
     interpretationLabel.setBounds (r.removeFromTop (18));
     r.removeFromTop (8);
 
@@ -674,6 +773,38 @@ void PromptMidiEditor::refreshFromProcessor()
 
     interpretationLabel.setText (has ? notes.joinIntoString ("    \xc2\xb7    ") : juce::String(), juce::dontSendNotification);
     interpretationLabel.setTooltip (notes.joinIntoString ("\n"));
+
+    // Every generation is checked; show the verdict, with the details and the form on hover.
+    if (has && comp.quality.score > 0.0)
+    {
+        juce::String q;
+        q << "Quality " << juce::String (comp.quality.score, 1) << " / 10";
+
+        if (comp.quality.candidates > 1)
+            q << juce::String::fromUTF8 ("  \xc2\xb7  ") << "best of " << comp.quality.candidates << " takes";
+
+        juce::StringArray details;
+
+        if (! comp.form.empty())
+            details.add ("Form: " + fromStd (comp.form));
+
+        if (comp.loopStart >= 0 && comp.loopEnd > comp.loopStart)
+            details.add ("Loop region: bar " + juce::String (comp.loopStart / juce::jmax (1, comp.ticksPerBar) + 1) + " to bar "
+                         + juce::String (comp.loopEnd / juce::jmax (1, comp.ticksPerBar) + 1));
+
+        for (auto& line : comp.quality.notesText)
+            details.add (fromStd (line));
+
+        qualityLabel.setText (q, juce::dontSendNotification);
+        qualityLabel.setColour (juce::Label::textColourId, comp.quality.score >= 8.5 ? Theme::ok
+                                                         : comp.quality.score >= 7.0 ? Theme::playhead : Theme::error);
+        qualityLabel.setTooltip (details.joinIntoString ("\n"));
+    }
+    else
+    {
+        qualityLabel.setText ({}, juce::dontSendNotification);
+        qualityLabel.setTooltip ({});
+    }
 
     const auto status = processor.getStatus();
     statusLabel.setText (processor.getStatusMessage(), juce::dontSendNotification);
@@ -753,6 +884,9 @@ void PromptMidiEditor::pushControls()
     c.mode = scaleBox.getSelectedId() > 1 ? scaleBox.getSelectedId() - 2 : -1;
     c.tempo = tempoSlider.getValue() < 40.0 ? 0 : (int) tempoSlider.getValue();
     c.bars = barsBox.getSelectedId() > 1 ? barsBox.getSelectedId() - 1 : 0;
+
+    static const char* lengths[] = { "", "sketch", "cue", "full", "extended" };
+    c.length = lengths[juce::jlimit (1, 5, lengthBox.getSelectedId()) - 1];
     processor.controlsChanged();
 }
 
@@ -763,6 +897,9 @@ void PromptMidiEditor::pullControls()
     keyBox.setSelectedId (c.keyRoot >= 0 ? c.keyRoot + 2 : 1, juce::dontSendNotification);
     scaleBox.setSelectedId (c.mode >= 0 ? c.mode + 2 : 1, juce::dontSendNotification);
     barsBox.setSelectedId (c.bars > 0 ? c.bars + 1 : 1, juce::dontSendNotification);
+
+    const juce::StringArray lengths { "", "sketch", "cue", "full", "extended" };
+    lengthBox.setSelectedId (juce::jmax (0, lengths.indexOf (c.length)) + 1, juce::dontSendNotification);
 
     if (! tempoSlider.isMouseButtonDown())
         tempoSlider.setValue (c.tempo > 0 ? (double) c.tempo : 39.0, juce::dontSendNotification);

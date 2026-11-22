@@ -75,6 +75,89 @@ void Settings::setEffort (const juce::String& effort)
     }
 }
 
+juce::String Settings::getArticulationOutput() const
+{
+    const auto o = props() != nullptr ? props()->getValue ("articulationOutput").trim().toLowerCase() : juce::String();
+    return (o == "keyswitch" || o == "cc") ? o : juce::String ("none");
+}
+
+void Settings::setArticulationOutput (const juce::String& output)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("articulationOutput", output);
+        p->saveIfNeeded();
+    }
+}
+
+juce::String Settings::getArticulationValues() const
+{
+    return props() != nullptr ? props()->getValue ("articulationValues").trim() : juce::String();
+}
+
+void Settings::setArticulationValues (const juce::String& values)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("articulationValues", values.trim());
+        p->saveIfNeeded();
+    }
+}
+
+int Settings::getArticulationController() const
+{
+    return props() != nullptr ? juce::jlimit (0, 127, props()->getIntValue ("articulationController", 32)) : 32;
+}
+
+void Settings::setArticulationController (int cc)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("articulationController", juce::jlimit (0, 127, cc));
+        p->saveIfNeeded();
+    }
+}
+
+namespace
+{
+    // The settings list articulations in this order; the map is indexed by pm::Articulation.
+    const pm::Articulation settingsOrder[] = { pm::Articulation::Sustain, pm::Articulation::Legato, pm::Articulation::Staccato,
+                                               pm::Articulation::Spiccato, pm::Articulation::Marcato, pm::Articulation::Pizzicato,
+                                               pm::Articulation::Tremolo, pm::Articulation::Trill };
+}
+
+juce::String Settings::defaultArticulationValues (const juce::String& output)
+{
+    const auto map = output == "cc" ? pm::ArticulationMap::uaccDefaults() : pm::ArticulationMap::keyswitchDefaults();
+    juce::StringArray values;
+
+    for (auto a : settingsOrder)
+        values.add (juce::String (map.valueFor (a)));
+
+    return values.joinIntoString (" ");
+}
+
+pm::ArticulationMap Settings::getArticulationMap() const
+{
+    const auto output = getArticulationOutput();
+
+    if (output == "none")
+        return {};
+
+    auto map = output == "cc" ? pm::ArticulationMap::uaccDefaults() : pm::ArticulationMap::keyswitchDefaults();
+    map.controller = getArticulationController();
+
+    juce::StringArray tokens;
+    tokens.addTokens (getArticulationValues(), " ,;", "");
+    tokens.removeEmptyStrings();
+
+    for (int i = 0; i < tokens.size() && i < 8; ++i)
+        map.values[(size_t) settingsOrder[i]] = juce::jlimit (-1, 127, tokens[i].getIntValue());
+
+    map.values[(size_t) pm::Articulation::Default] = map.values[(size_t) pm::Articulation::Sustain];
+    return map;
+}
+
 juce::File Settings::getFile() const
 {
     return props() != nullptr ? props()->getFile() : juce::File();

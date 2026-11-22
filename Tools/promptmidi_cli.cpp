@@ -17,7 +17,8 @@
 
 static void usage()
 {
-    std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json] [--list-styles]\n";
+    std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json]\n"
+                 "                     [--length sketch|cue|full|extended] [--articulations none|keyswitch|uacc] [--list-styles]\n";
 }
 
 static std::string jsonEscape (const std::string& s)
@@ -92,9 +93,10 @@ static void writeJson (const std::string& path, const pm::StyleSpec& spec, const
 
 int main (int argc, char** argv)
 {
-    std::string prompt, outFile, jsonFile;
+    std::string prompt, outFile, jsonFile, articulations = "none";
     uint64_t seed = 1;
     bool printNotes = false;
+    pm::PromptOverrides overrides;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -104,6 +106,8 @@ int main (int argc, char** argv)
         else if (a == "--seed" && i + 1 < argc)               seed = std::strtoull (argv[++i], nullptr, 10);
         else if (a == "--notes")                              printNotes = true;
         else if (a == "--json" && i + 1 < argc)               jsonFile = argv[++i];
+        else if (a == "--length" && i + 1 < argc)             overrides.length = argv[++i];
+        else if (a == "--articulations" && i + 1 < argc)      articulations = argv[++i];
         else if (a == "--list-styles")
         {
             for (auto& s : pm::builtInStyles())
@@ -121,7 +125,7 @@ int main (int argc, char** argv)
         return 1;
     }
 
-    const auto spec = pm::interpretPrompt (prompt, seed);
+    const auto spec = pm::interpretPrompt (prompt, seed, overrides);
     const auto comp = pm::compose (spec, seed);
 
     std::cout << "Title:   " << spec.title << "\n"
@@ -165,7 +169,12 @@ int main (int argc, char** argv)
     if (! jsonFile.empty())
         writeJson (jsonFile, spec, comp);
 
-    const auto bytes = pm::writeMidiFile (comp);
+    pm::MidiExportOptions options;
+
+    if (articulations == "keyswitch" || articulations == "keyswitches")  options.articulations = pm::ArticulationMap::keyswitchDefaults();
+    else if (articulations == "uacc" || articulations == "cc")           options.articulations = pm::ArticulationMap::uaccDefaults();
+
+    const auto bytes = pm::writeMidiFile (comp, -1, options);
     std::ofstream f (outFile, std::ios::binary);
     f.write ((const char*) bytes.data(), (std::streamsize) bytes.size());
     std::cout << "Wrote " << outFile << " (" << bytes.size() << " bytes)\n";

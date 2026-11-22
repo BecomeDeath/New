@@ -15,7 +15,7 @@ public:
 
     void setComposition (const pm::Composition*);
     void setSelectedTrack (int index);
-    void setMutedMask (uint32_t mask);
+    void setMutedMask (uint64_t mask);
     void setPlayhead (double tick);
 
     static juce::Colour trackColour (int index);
@@ -26,13 +26,15 @@ public:
 private:
     void rebuildCache();
     juce::Rectangle<int> chordLane() const;
+    juce::Rectangle<int> sectionLane() const;
+    bool hasSections() const;
     juce::Rectangle<int> noteArea() const;
     juce::Rectangle<int> drumLane() const;
     bool hasDrums() const;
 
     const pm::Composition* comp = nullptr;
     int selectedTrack = -1;
-    uint32_t mutedMask = 0;
+    uint64_t mutedMask = 0;
     double playhead = -1.0;
     juce::Image cache;
     bool cacheDirty = true;

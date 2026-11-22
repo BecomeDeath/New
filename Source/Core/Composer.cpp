@@ -2423,12 +2423,15 @@ std::string Composition::summary() const
         chordsText += " \xE2\x80\xA6";
 
     std::string key = keyName (keyRoot, mode);
+    const int secs = (int) std::lround (seconds());
+    const std::string duration = std::to_string (secs / 60) + ":" + (secs % 60 < 10 ? "0" : "") + std::to_string (secs % 60);
 
     if (endKeyRoot != keyRoot)
         key += " \xE2\x86\x92 " + pitchClassName (endKeyRoot, keyPrefersFlats (endKeyRoot, mode));
 
     return key + " \xC2\xB7 " + std::to_string (tempo) + " BPM \xC2\xB7 " + std::to_string (tsNum) + "/"
-         + std::to_string (tsDen) + " \xC2\xB7 " + std::to_string (bars) + " bars" + (chordsText.empty() ? "" : " \xC2\xB7 " + chordsText);
+         + std::to_string (tsDen) + " \xC2\xB7 " + std::to_string (bars) + " bars (" + duration + ")"
+         + (chordsText.empty() ? "" : " \xC2\xB7 " + chordsText);
 }
 
 int Composition::noteCount() const

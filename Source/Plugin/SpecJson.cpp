@@ -142,6 +142,8 @@ juce::var specToVar (const pm::StyleSpec& s)
     put (o, "humanize", s.humanize);
     put (o, "dynamics", juce::String (pm::dynamicsId (s.dynamics)));
     put (o, "ending", s.resolveEnding ? "resolve" : "loop");
+    put (o, "orchestral", s.orchestral);
+    put (o, "length", juce::String (s.length));
 
     juce::Array<juce::var> theme;
 
@@ -249,6 +251,8 @@ bool specFromVar (const juce::var& o, pm::StyleSpec& s, juce::String& error)
         s.dynamics = dyn;
 
     s.resolveEnding = getString (o, "ending", "resolve").trim().equalsIgnoreCase ("resolve");
+    s.orchestral = getBool (o, "orchestral", false);
+    s.length = toStd (getString (o, "length", "auto").trim().toLowerCase());
 
     if (auto* theme = o["theme"].getArray())
     {
@@ -316,12 +320,33 @@ juce::var compositionToVar (const pm::Composition& c)
 
     for (auto& ch : c.chords)
     {
-        juce::Array<juce::var> a { ch.start, ch.end, juce::String (ch.name), juce::String (ch.roman) };
+        juce::Array<juce::var> pcs;
+
+        for (int pc : ch.pcs)
+            pcs.add (pc);
+
+        juce::Array<juce::var> a { ch.start, ch.end, juce::String (ch.name), juce::String (ch.roman), pcs, ch.bassPc };
         chords.add (a);
     }
 
     put (o, "chords", chords);
     put (o, "progression", stringArray (c.progression));
+
+    juce::Array<juce::var> markers;
+
+    for (auto& m : c.markers)
+        markers.add (juce::Array<juce::var> { m.tick, juce::String (m.text) });
+
+    put (o, "markers", markers);
+    put (o, "loopStart", c.loopStart);
+    put (o, "loopEnd", c.loopEnd);
+    put (o, "form", juce::String (c.form));
+
+    juce::var q = makeObject();
+    put (q, "score", c.quality.score);
+    put (q, "candidates", c.quality.candidates);
+    put (q, "notes", stringArray (c.quality.notesText));
+    put (o, "quality", q);
 
     juce::Array<juce::var> tracks;
 
@@ -333,9 +358,11 @@ juce::var compositionToVar (const pm::Composition& c)
         put (tr, "program", t.program);
         put (tr, "channel", t.channel);
         put (tr, "isDrum", t.isDrum);
+        put (tr, "splitFrom", t.splitFrom);
 
+        // start, length, pitch, velocity, articulation
         juce::Array<juce::var> notes;
-        notes.ensureStorageAllocated ((int) t.notes.size() * 4);
+        notes.ensureStorageAllocated ((int) t.notes.size() * 5);
 
         for (auto& n : t.notes)
         {
@@ -343,8 +370,10 @@ juce::var compositionToVar (const pm::Composition& c)
             notes.add (n.length);
             notes.add (n.pitch);
             notes.add (n.velocity);
+            notes.add ((int) n.articulation);
         }
 
+        put (tr, "noteFields", 5);
         put (tr, "notes", notes);
 
         juce::Array<juce::var> cc;
@@ -390,13 +419,54 @@ bool compositionFromVar (const juce::var& o, pm::Composition& c)
         for (auto& ch : *chords)
         {
             if (auto* a = ch.getArray(); a != nullptr && a->size() >= 4)
-                c.chords.push_back ({ (int) (*a)[0], (int) (*a)[1], toStd ((*a)[2].toString()), toStd ((*a)[3].toString()) });
+            {
+                pm::ChordSlot slot;
+                slot.start = (int) (*a)[0];
+                slot.end = (int) (*a)[1];
+                slot.name = toStd ((*a)[2].toString());
+                slot.roman = toStd ((*a)[3].toString());
+
+                if (a->size() >= 6)
+                {
+                    if (auto* pcs = (*a)[4].getArray())
+                        for (auto& pc : *pcs)
+                            slot.pcs.push_back (pm::wrapPc ((int) pc));
+
+                    slot.bassPc = (int) (*a)[5] >= 0 ? pm::wrapPc ((int) (*a)[5]) : -1;
+                }
+
+                c.chords.push_back (slot);
+            }
         }
     }
 
     if (auto* prog = o["progression"].getArray())
         for (auto& p : *prog)
             c.progression.push_back (toStd (p.toString()));
+
+    if (auto* markers = o["markers"].getArray())
+        for (auto& m : *markers)
+            if (auto* a = m.getArray(); a != nullptr && a->size() >= 2)
+                c.markers.push_back ({ juce::jmax (0, (int) (*a)[0]), toStd ((*a)[1].toString()) });
+
+    c.loopStart = getInt (o, "loopStart", -1);
+    c.loopEnd = getInt (o, "loopEnd", -1);
+
+    if (c.loopStart < 0 || c.loopEnd <= c.loopStart || c.loopEnd > juce::jmax (c.lengthTicks, c.loopStart + 1))
+        c.loopStart = c.loopEnd = -1;
+
+    c.form = toStd (getString (o, "form", ""));
+
+    if (o["quality"].isObject())
+    {
+        const auto& q = o["quality"];
+        c.quality.score = getDouble (q, "score", 0.0);
+        c.quality.candidates = getInt (q, "candidates", 1);
+
+        if (auto* notes = q["notes"].getArray())
+            for (auto& n : *notes)
+                c.quality.notesText.push_back (toStd (n.toString()));
+    }
 
     if (auto* tracks = o["tracks"].getArray())
     {
@@ -413,11 +483,24 @@ bool compositionFromVar (const juce::var& o, pm::Composition& c)
             tr.program = juce::jlimit (0, 127, getInt (t, "program", 0));
             tr.channel = juce::jlimit (0, 15, getInt (t, "channel", 0));
             tr.isDrum = getBool (t, "isDrum", false);
+            tr.splitFrom = getInt (t, "splitFrom", -1);
+
+            // Older states stored four numbers per note (no articulation).
+            const int stride = getInt (t, "noteFields", 4) == 5 ? 5 : 4;
 
             if (auto* notes = t["notes"].getArray())
-                for (int i = 0; i + 3 < notes->size(); i += 4)
-                    tr.notes.push_back ({ (int) (*notes)[i], (int) (*notes)[i + 1],
-                                          juce::jlimit (0, 127, (int) (*notes)[i + 2]), juce::jlimit (1, 127, (int) (*notes)[i + 3]) });
+            {
+                for (int i = 0; i + stride - 1 < notes->size(); i += stride)
+                {
+                    pm::Note n { (int) (*notes)[i], (int) (*notes)[i + 1],
+                                 juce::jlimit (0, 127, (int) (*notes)[i + 2]), juce::jlimit (1, 127, (int) (*notes)[i + 3]) };
+
+                    if (stride == 5)
+                        n.articulation = (pm::Articulation) juce::jlimit (0, 8, (int) (*notes)[i + 4]);
+
+                    tr.notes.push_back (n);
+                }
+            }
 
             if (auto* cc = t["cc"].getArray())
                 for (int i = 0; i + 2 < cc->size(); i += 3)
@@ -426,6 +509,10 @@ bool compositionFromVar (const juce::var& o, pm::Composition& c)
             c.tracks.push_back (tr);
         }
     }
+
+    for (auto& t : c.tracks)
+        if (t.splitFrom >= (int) c.tracks.size())
+            t.splitFrom = -1;
 
     return true;
 }
@@ -488,7 +575,10 @@ juce::var outputSchema()
         { "mode",            enumOf (modes) },
         { "tempo",           typed ("integer", "Beats per minute (quarter notes), 40-220") },
         { "timeSignature",   enumOf ({ "4/4", "3/4", "2/4", "6/8", "12/8" }) },
-        { "bars",            typed ("integer", "Length in bars, 4-64") },
+        { "bars",            typed ("integer", "Length in bars (4-160); for orchestral cues only used when length is \"bars\"") },
+        { "orchestral",      typed ("boolean", "true for orchestral, cinematic, film or game-score music: the engine composes a complete cue") },
+        { "length",          withDescription (enumOf ({ "auto", "sketch", "cue", "full", "extended", "bars" }),
+                                              "Orchestral cue length: sketch 16 bars, cue about 70 s, full about 2.5 min, extended about 3.75 min, bars = use bars") },
         { "progression",     withDescription (progression, "Roman numerals relative to the key and mode for the A sections") },
         { "progressionB",    withDescription (progression, "Contrasting progression for the B section (bridge); [] to reuse the A progression") },
         { "finalKeyChange",  typed ("integer", "Semitones the final statement of the theme lifts up (0 = no key change, 1-3 typical)") },

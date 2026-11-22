@@ -83,7 +83,7 @@ void PromptMidiProcessor::emitRange (const PlaybackData& data, double fromTick, 
     auto it = std::lower_bound (ev.begin(), ev.end(), fromTick,
                                 [] (const PlaybackEvent& e, double t) { return (double) e.tick < t; });
 
-    const uint32_t muted = mutedMask.load (std::memory_order_relaxed);
+    const uint64_t muted = mutedMask.load (std::memory_order_relaxed);
 
     for (; it != ev.end(); ++it)
     {
@@ -221,25 +221,32 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
         if (loop)
         {
-            double a = std::fmod (startTick, length);
+            // Like a game engine: play into the loop region once, then repeat it.
+            const double l0 = data->loopStart, l1 = data->loopEnd > data->loopStart ? data->loopEnd : length;
+            const double loopLength = juce::jmax (1.0, l1 - l0);
+            double a = startTick;
 
             if (a < 0.0)
-                a += length;
+                a = std::fmod (a, l1) + l1;
+
+            if (a >= l1)
+                a = l0 + std::fmod (a - l0, loopLength);
 
             const double b = a + span;
 
-            if (b <= length)
+            if (b <= l1)
             {
                 emitRange (*data, a, b, false, ticksPerSample, 0, numSamples);
             }
             else
             {
-                emitRange (*data, a, length, true, ticksPerSample, 0, numSamples);
-                const int wrapSample = (int) ((length - a) / ticksPerSample);
-                emitRange (*data, 0.0, b - length, false, ticksPerSample, wrapSample, numSamples);
+                emitRange (*data, a, l1, true, ticksPerSample, 0, numSamples);
+                const int wrapSample = (int) ((l1 - a) / ticksPerSample);
+                allNotesOff (juce::jlimit (0, numSamples - 1, wrapSample));
+                emitRange (*data, l0, l0 + (b - l1), false, ticksPerSample, wrapSample, numSamples);
             }
 
-            playheadTick.store (b > length ? b - length : b);
+            playheadTick.store (b > l1 ? l0 + (b - l1) : b);
         }
         else if (startTick < length + 1.0)
         {
@@ -305,6 +312,7 @@ pm::PromptOverrides PromptMidiProcessor::promptOverrides() const
     o.mode = controls.mode;
     o.tempo = controls.tempo;
     o.bars = controls.bars;
+    o.length = controls.length.toStdString();
     return o;
 }
 
@@ -321,7 +329,13 @@ void PromptMidiProcessor::applyControls (pm::StyleSpec& s, bool includeMode) con
             t.entryBar = controls.bars < 8 ? 0 : (int) std::lround ((double) t.entryBar * controls.bars / juce::jmax (1, s.bars));
 
         s.bars = controls.bars;
+
+        if (s.orchestral)
+            s.length = "bars";
     }
+
+    if (s.orchestral && controls.length.isNotEmpty())
+        s.length = controls.length.toStdString();
 
     pm::normalizeSpec (s);
 }
@@ -334,6 +348,7 @@ juce::String PromptMidiProcessor::controlsDescription() const
     if (controls.mode >= 0)     parts.add ("mode " + juce::String (pm::modeInfo ((pm::Mode) controls.mode).id));
     if (controls.tempo > 0)     parts.add ("tempo " + juce::String (controls.tempo) + " BPM");
     if (controls.bars > 0)      parts.add (juce::String (controls.bars) + " bars");
+    if (controls.length.isNotEmpty()) parts.add ("length " + controls.length + " (for an orchestral cue)");
 
     return parts.joinIntoString (", ");
 }
@@ -479,9 +494,11 @@ void PromptMidiProcessor::publishPlayback()
     auto data = std::make_shared<PlaybackData>();
     data->lengthTicks = composition.lengthTicks;
     data->tempo = composition.tempo;
+    data->loopStart = composition.loopStart >= 0 && composition.loopEnd > composition.loopStart ? composition.loopStart : 0;
+    data->loopEnd = composition.loopStart >= 0 && composition.loopEnd > composition.loopStart ? composition.loopEnd : composition.lengthTicks;
     data->programs.fill (0);
 
-    for (int ti = 0; ti < (int) composition.tracks.size() && ti < 32; ++ti)
+    for (int ti = 0; ti < (int) composition.tracks.size() && ti < maxMutableTracks; ++ti)
     {
         const auto& t = composition.tracks[(size_t) ti];
         const uint8_t ch = (uint8_t) (t.channel & 0x0F);
@@ -525,10 +542,10 @@ void PromptMidiProcessor::timerCallback()
 //==============================================================================
 void PromptMidiProcessor::setTrackMuted (int index, bool muted)
 {
-    if (index < 0 || index >= 32)
+    if (index < 0 || index >= maxMutableTracks)
         return;
 
-    const uint32_t bit = 1u << index;
+    const uint64_t bit = (uint64_t) 1 << index;
     auto mask = mutedMask.load();
     mutedMask.store (muted ? (mask | bit) : (mask & ~bit));
     sendChangeMessage();
@@ -536,7 +553,7 @@ void PromptMidiProcessor::setTrackMuted (int index, bool muted)
 
 bool PromptMidiProcessor::isTrackMuted (int index) const
 {
-    return index >= 0 && index < 32 && ((mutedMask.load() >> index) & 1u);
+    return index >= 0 && index < maxMutableTracks && ((mutedMask.load() >> index) & 1u);
 }
 
 void PromptMidiProcessor::setPreviewPlaying (bool shouldPlay)
@@ -571,16 +588,28 @@ bool PromptMidiProcessor::writeMidiFile (const juce::File& file, int trackIndex)
     if (trackIndex < 0)
     {
         std::vector<pm::Track> kept;
+        std::vector<int> newIndex (toWrite.tracks.size(), -1);
 
         for (int i = 0; i < (int) toWrite.tracks.size(); ++i)
+        {
             if (! isTrackMuted (i))
+            {
+                newIndex[(size_t) i] = (int) kept.size();
                 kept.push_back (toWrite.tracks[(size_t) i]);
+            }
+        }
+
+        for (auto& t : kept)
+            if (t.splitFrom >= 0)
+                t.splitFrom = t.splitFrom < (int) newIndex.size() ? newIndex[(size_t) t.splitFrom] : -1;
 
         if (! kept.empty())
             toWrite.tracks = kept;
     }
 
-    const auto bytes = pm::writeMidiFile (toWrite, trackIndex);
+    pm::MidiExportOptions options;
+    options.articulations = settings->getArticulationMap();
+    const auto bytes = pm::writeMidiFile (toWrite, trackIndex, options);
     return file.replaceWithData (bytes.data(), bytes.size());
 }
 
@@ -606,7 +635,8 @@ void PromptMidiProcessor::getStateInformation (juce::MemoryBlock& destData)
     xml.setAttribute ("mode", controls.mode);
     xml.setAttribute ("tempo", controls.tempo);
     xml.setAttribute ("bars", controls.bars);
-    xml.setAttribute ("muted", (int) mutedMask.load());
+    xml.setAttribute ("length", controls.length);
+    xml.setAttribute ("muted", juce::String ((juce::int64) mutedMask.load()));
 
     xml.setAttribute ("lastPrompt", lastPrompt);
     xml.setAttribute ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
@@ -644,6 +674,7 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         controls.mode = xml->getIntAttribute ("mode", -1);
         controls.tempo = xml->getIntAttribute ("tempo", 0);
         controls.bars = xml->getIntAttribute ("bars", 0);
+        controls.length = xml->getStringAttribute ("length");
 
         if (auto* params = xml->getChildByName (parameters.state.getType()))
             parameters.replaceState (juce::ValueTree::fromXml (*params));
@@ -672,7 +703,7 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         {
             composition = restored;
             publishPlayback();
-            mutedMask.store ((uint32_t) xml->getIntAttribute ("muted", 0));
+            mutedMask.store ((uint64_t) xml->getStringAttribute ("muted", "0").getLargeIntValue());
             statusMessage = "Restored from the project.";
         }
 
