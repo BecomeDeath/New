@@ -70,6 +70,7 @@ struct TrackSpec
     int entryBar = 0;         // bar (0-based) where the track comes in
     std::string pattern = "auto";
     int endBar = -1;          // bar where the part stops (exclusive); -1 = plays to the end
+    int mergeInto = -1;       // index of another track this part is written into (a solo piano's two hands)
 };
 
 /** A complete, engine-independent description of the piece to compose.

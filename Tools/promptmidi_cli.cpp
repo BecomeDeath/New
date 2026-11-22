@@ -19,7 +19,7 @@ static void usage()
 {
     std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json]\n"
                  "                     [--length sketch|cue|full|extended] [--articulations none|keyswitch|uacc]\n"
-                 "                     [--variation N] [--list-styles]\n";
+                 "                     [--variation N] [--instruments \"Piano\" | \"Flutes, Harp:arpeggio\"] [--list-styles]\n";
 }
 
 static std::string jsonEscape (const std::string& s)
@@ -109,6 +109,40 @@ int main (int argc, char** argv)
         else if (a == "--notes")                              printNotes = true;
         else if (a == "--json" && i + 1 < argc)               jsonFile = argv[++i];
         else if (a == "--length" && i + 1 < argc)             overrides.length = argv[++i];
+        else if (a == "--instruments" && i + 1 < argc)
+        {
+            // "Piano" or "Flutes, Harp:arpeggio, Celli:bass" - names from the catalogue, optional :role
+            std::string list = argv[++i], item;
+
+            auto flush = [&]
+            {
+                while (! item.empty() && item.front() == ' ') item.erase (item.begin());
+                while (! item.empty() && item.back() == ' ') item.pop_back();
+
+                if (item.empty())
+                    return;
+
+                pm::InstrumentChoice c;
+                const auto colon = item.find (':');
+                c.name = item.substr (0, colon);
+                c.role = colon == std::string::npos ? "auto" : item.substr (colon + 1);
+
+                for (auto& e : pm::instrumentCatalogue())
+                    if (e.name == c.name)
+                        c.program = e.program;
+
+                overrides.instruments.push_back (c);
+                item.clear();
+            };
+
+            for (char ch : list)
+            {
+                if (ch == ',') flush();
+                else item += ch;
+            }
+
+            flush();
+        }
         else if (a == "--articulations" && i + 1 < argc)      articulations = argv[++i];
         else if (a == "--list-styles")
         {

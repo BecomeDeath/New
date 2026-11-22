@@ -172,6 +172,10 @@ juce::var specToVar (const pm::StyleSpec& s)
         put (tr, "velocity", t.velocity);
         put (tr, "entryBar", t.entryBar);
         put (tr, "pattern", juce::String (t.pattern));
+
+        if (t.mergeInto >= 0)
+            put (tr, "mergeInto", t.mergeInto);
+
         tracks.add (tr);
     }
 
@@ -290,6 +294,7 @@ bool specFromVar (const juce::var& o, pm::StyleSpec& s, juce::String& error)
             tr.velocity = getInt (t, "velocity", 90);
             tr.entryBar = getInt (t, "entryBar", 0);
             tr.pattern = toStd (getString (t, "pattern", "auto"));
+            tr.mergeInto = getInt (t, "mergeInto", -1);
             s.tracks.push_back (tr);
         }
     }

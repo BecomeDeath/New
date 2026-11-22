@@ -352,6 +352,9 @@ void normalizeSpec (StyleSpec& s)
 
         t.entryBar = clampValue (t.entryBar, 0, std::max (0, s.bars - 1));
 
+        if (t.mergeInto >= (int) s.tracks.size() || t.mergeInto == (int) (&t - s.tracks.data()))
+            t.mergeInto = -1;
+
         const auto& valid = patternsForRole (t.role);
         t.pattern = lower (t.pattern);
 

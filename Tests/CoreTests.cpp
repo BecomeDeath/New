@@ -832,6 +832,241 @@ static void testThemeDevelopment()
     CHECK (! first.empty() && ! second.empty() && first != second);
 }
 
+//==============================================================================
+// Variety, the learned models and custom instruments
+
+#include "Learned.h"
+
+static void testLearnedModels()
+{
+    std::printf ("learned models\n");
+    CHECK (learned::numMelodyCounts > 1000);
+    CHECK (learned::numRhythmPatterns > 100);
+    CHECK (learned::numProgressions > 100);
+
+    detail::FamilyMix mix;
+    mix.weight[learned::Cinematic] = 1.0;
+    Rng rng (5);
+
+    // Progressions parse in their mode, differ from what is avoided, and vary.
+    std::set<std::vector<std::string>> seen;
+
+    for (Mode mode : { Mode::Major, Mode::Minor, Mode::HarmonicMinor })
+    {
+        for (int i = 0; i < 20; ++i)
+        {
+            const auto p = detail::learnedProgression (mix, mode, rng, { { "i", "VI", "III", "VII" } });
+            CHECK (p.size() == 4);
+
+            for (auto& r : p)
+            {
+                Chord c;
+                CHECK (parseChordSymbol (r, 0, mode, c));
+            }
+
+            CHECK (p != std::vector<std::string> ({ "i", "VI", "III", "VII" }));
+            seen.insert (p);
+        }
+    }
+
+    CHECK (seen.size() >= 25);
+    CHECK (detail::learnedProgression (mix, Mode::Dorian, rng).empty()); // no data: the caller falls back
+
+    // Bar rhythms fill the bar exactly, start cleanly, and get busier with density.
+    for (int num : { 4, 3, 6 })
+    {
+        const auto m = detail::makeMeter (num, num == 6 ? 8 : 4);
+        int sparse = 0, busy = 0;
+
+        for (int i = 0; i < 40; ++i)
+        {
+            for (double density : { 0.15, 0.85 })
+            {
+                const auto r = detail::learnedBarRhythm (m, density, detail::MelStyle::Lyrical, mix, true, rng);
+                CHECK (! r.empty());
+                int pos = 0, notes = 0;
+
+                for (auto& n : r)
+                {
+                    CHECK (n.offset == pos && n.dur > 0);
+                    pos += n.dur;
+                    notes += n.rest ? 0 : 1;
+                }
+
+                CHECK_EQ (pos, m.ticksPerBar);
+                (density < 0.5 ? sparse : busy) += notes;
+            }
+        }
+
+        CHECK (busy > sparse);
+    }
+
+    // The interval model prefers steps to wild leaps.
+    CHECK (detail::learnedStepLogProb (mix, false, 1, 1, 1) > detail::learnedStepLogProb (mix, false, 1, 1, 7));
+}
+
+static void testVariationsDiffer()
+{
+    std::printf ("generations and variations differ\n");
+
+    for (auto* prompt : { "Generate me a fantasy orchestral midi", "Make me a soft piano midi", "Epic orchestral battle music" })
+    {
+        const auto spec = interpretPrompt (prompt, 11);
+        std::set<std::vector<std::string>> harmonies;
+        std::set<std::string> forms, themes;
+
+        for (uint64_t v = 1; v <= 6; ++v)
+        {
+            const auto varied = varySpec (spec, v * 7919);
+            CHECK (varied.keyRoot == spec.keyRoot && varied.mode == spec.mode && varied.tempo == spec.tempo);
+            CHECK (varied.tracks.size() == spec.tracks.size());
+            const auto c = compose (varied, 1000 + v);
+            harmonies.insert (varied.progression);
+            forms.insert (c.form);
+
+            std::string tune;
+
+            for (auto& t : c.tracks)
+                if (t.role == Role::Melody)
+                {
+                    for (size_t n = 0; n < t.notes.size() && n < 16; ++n)
+                        tune += std::to_string (t.notes[n].pitch) + ":" + std::to_string (t.notes[n].start % c.ticksPerBar) + " ";
+                    break;
+                }
+
+            themes.insert (tune);
+            CHECK (checkQuality (c).score >= 8.0);
+        }
+
+        if (harmonies.size() < 4 || themes.size() < 6)
+            std::printf ("  %s: %d progressions, %d forms, %d themes in 6 variations\n", prompt, (int) harmonies.size(), (int) forms.size(), (int) themes.size());
+
+        CHECK (harmonies.size() >= 4);
+        CHECK (themes.size() == 6);
+    }
+
+    // Cues: the form and who leads change between generations.
+    std::set<std::string> forms;
+
+    for (uint64_t seed = 1; seed <= 8; ++seed)
+        forms.insert (compose (interpretPrompt ("Heroic main theme for an adventure game", seed), seed).form);
+
+    CHECK (forms.size() >= 3);
+}
+
+static std::vector<InstrumentChoice> choose (std::initializer_list<const char*> names)
+{
+    std::vector<InstrumentChoice> out;
+
+    for (auto* n : names)
+    {
+        InstrumentChoice c;
+        c.name = n;
+
+        for (auto& e : instrumentCatalogue())
+            if (e.name == n)
+                c.program = e.program;
+
+        out.push_back (c);
+    }
+
+    return out;
+}
+
+static void testCustomInstruments()
+{
+    std::printf ("custom instruments\n");
+    CHECK (instrumentCatalogue().size() > 50);
+
+    auto make = [] (const char* prompt, std::vector<InstrumentChoice> inst, const char* length = "")
+    {
+        PromptOverrides o;
+        o.instruments = std::move (inst);
+        o.length = length;
+        const auto spec = interpretPrompt (prompt, 3, o);
+        return std::make_pair (spec, compose (spec, 3));
+    };
+
+    // One piano: a solo piece, melody and accompaniment on one track.
+    {
+        const auto [spec, c] = make ("sad orchestral lament", choose ({ "Piano" }), "full");
+        CHECK (! spec.orchestral);
+        CHECK_EQ ((int) c.tracks.size(), 1);
+        CHECK (c.tracks[0].name == "Piano" && c.tracks[0].program == 0);
+        CHECK (c.seconds() > 110.0 && c.seconds() < 200.0);
+
+        int high = 0, low = 0;
+
+        for (auto& n : c.tracks[0].notes)
+            (n.pitch >= 60 ? high : low)++;
+
+        CHECK (high > 20 && low > 20); // both hands
+        CHECK (checkQuality (c).score >= 8.5);
+        checkComposition (c, "solo piano");
+    }
+
+    // One melodic instrument: just the tune.
+    {
+        const auto [spec, c] = make ("heroic theme", choose ({ "Flutes" }));
+        CHECK_EQ ((int) c.tracks.size(), 1);
+        CHECK (c.tracks[0].program == 73 && c.tracks[0].role == Role::Melody);
+    }
+
+    // A duo and a band: sensible roles, nothing else added.
+    {
+        const auto [spec, c] = make ("peaceful village", choose ({ "Celli", "Harp" }));
+        CHECK_EQ ((int) c.tracks.size(), 2);
+        CHECK (spec.tracks[0].role == Role::Melody && spec.tracks[1].role == Role::Arpeggio);
+        CHECK (checkQuality (c).lowMudPct < 5.0);
+    }
+    {
+        const auto [spec, c] = make ("rock song", choose ({ "Electric Guitar", "Bass", "Drums" }));
+        CHECK_EQ ((int) c.tracks.size(), 3); // the guitar plays tune and chords on its one track
+
+        auto roleOf = [&] (const char* name)
+        {
+            for (auto& t : spec.tracks)
+                if (t.name == name)
+                    return t.role;
+
+            return Role::Pad;
+        };
+
+        CHECK (roleOf ("Bass") == Role::Bass && roleOf ("Drums") == Role::Percussion && roleOf ("Electric Guitar") == Role::Melody);
+    }
+
+    // A user-set role is kept.
+    {
+        auto list = choose ({ "Oboes", "Clarinets", "Bassoons" });
+        list[1].role = "melody";
+        const auto [spec, c] = make ("pastoral", list);
+        CHECK (spec.tracks[1].role == Role::Melody && spec.tracks[0].role != Role::Melody);
+    }
+
+    // Three or more pitched instruments in an orchestral style: a full cue, only those instruments.
+    {
+        const auto [spec, c] = make ("epic orchestral battle", choose ({ "Violins I", "Violins II", "Violas", "Celli", "Timpani" }), "full");
+        CHECK (spec.orchestral);
+        CHECK (c.seconds() > 110.0);
+        std::set<std::string> names;
+
+        for (auto& t : c.tracks)
+            names.insert (t.name.substr (0, t.name.find (" (")));
+
+        CHECK (names == std::set<std::string> ({ "Violins I", "Violins II", "Violas", "Celli", "Timpani" }));
+        CHECK (checkQuality (c).score >= 8.5);
+    }
+
+    // A plan from elsewhere (Claude) is rebuilt around the user's instruments.
+    {
+        auto spec = interpretPrompt ("jazz combo", 2);
+        applyInstrumentChoices (spec, choose ({ "Alto Sax", "Piano", "Upright Bass", "Drums" }));
+        CHECK_EQ ((int) spec.tracks.size(), 4);
+        CHECK (spec.tracks[0].role == Role::Melody && spec.tracks[1].role == Role::Chords && spec.tracks[2].role == Role::Bass);
+        CHECK (compose (spec, 2).noteCount() > 50);
+    }
+}
+
 int main()
 {
     testChordParsing();
@@ -844,6 +1079,9 @@ int main()
     testCueQuality();
     testFullOrchestraAndArticulations();
     testThemeDevelopment();
+    testLearnedModels();
+    testVariationsDiffer();
+    testCustomInstruments();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

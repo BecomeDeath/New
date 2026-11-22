@@ -389,6 +389,7 @@ pm::PromptOverrides PromptMidiProcessor::promptOverrides() const
     o.tempo = controls.tempo;
     o.bars = controls.bars;
     o.length = controls.length.toStdString();
+    o.instruments = controls.instruments;
     return o;
 }
 
@@ -413,6 +414,10 @@ void PromptMidiProcessor::applyControls (pm::StyleSpec& s, bool includeMode) con
     if (s.orchestral && controls.length.isNotEmpty())
         s.length = controls.length.toStdString();
 
+    // Claude was told the instruments; this makes sure the plan uses exactly those.
+    if (! controls.instruments.empty())
+        pm::applyInstrumentChoices (s, controls.instruments);
+
     pm::normalizeSpec (s);
 }
 
@@ -424,7 +429,18 @@ juce::String PromptMidiProcessor::controlsDescription() const
     if (controls.mode >= 0)     parts.add ("mode " + juce::String (pm::modeInfo ((pm::Mode) controls.mode).id));
     if (controls.tempo > 0)     parts.add ("tempo " + juce::String (controls.tempo) + " BPM");
     if (controls.bars > 0)      parts.add (juce::String (controls.bars) + " bars");
-    if (controls.length.isNotEmpty()) parts.add ("length " + controls.length + " (for an orchestral cue)");
+    if (controls.length.isNotEmpty()) parts.add ("length " + controls.length);
+
+    if (! controls.instruments.empty())
+    {
+        juce::StringArray list;
+
+        for (auto& c : controls.instruments)
+            list.add (juce::String (c.name) + (c.program >= 0 ? " (GM " + juce::String (c.program) + ")" : juce::String (" (percussion)"))
+                      + (c.role != "auto" ? ", role " + juce::String (c.role) : juce::String()));
+
+        parts.add ("use exactly these instruments, one track each, in this order: " + list.joinIntoString ("; "));
+    }
 
     return parts.joinIntoString (", ");
 }
@@ -725,6 +741,21 @@ void PromptMidiProcessor::getStateInformation (juce::MemoryBlock& destData)
     xml.setAttribute ("tempo", controls.tempo);
     xml.setAttribute ("bars", controls.bars);
     xml.setAttribute ("length", controls.length);
+
+    {
+        juce::Array<juce::var> list;
+
+        for (auto& c : controls.instruments)
+        {
+            juce::DynamicObject::Ptr o = new juce::DynamicObject();
+            o->setProperty ("name", juce::String (c.name));
+            o->setProperty ("program", c.program);
+            o->setProperty ("role", juce::String (c.role));
+            list.add (juce::var (o.get()));
+        }
+
+        xml.setAttribute ("instruments", juce::JSON::toString (juce::var (list), true));
+    }
     xml.setAttribute ("muted", juce::String ((juce::int64) mutedMask.load()));
 
     xml.setAttribute ("lastPrompt", lastPrompt);
@@ -765,6 +796,21 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         controls.tempo = xml->getIntAttribute ("tempo", 0);
         controls.bars = xml->getIntAttribute ("bars", 0);
         controls.length = xml->getStringAttribute ("length");
+        controls.instruments.clear();
+
+        if (auto* list = juce::JSON::parse (xml->getStringAttribute ("instruments")).getArray())
+        {
+            for (auto& v : *list)
+            {
+                pm::InstrumentChoice c;
+                c.name = v["name"].toString().toStdString();
+                c.program = juce::jlimit (-1, 127, (int) v["program"]);
+                c.role = v["role"].toString().isEmpty() ? std::string ("auto") : v["role"].toString().toStdString();
+
+                if (! c.name.empty())
+                    controls.instruments.push_back (c);
+            }
+        }
 
         if (auto* params = xml->getChildByName (parameters.state.getType()))
             parameters.replaceState (juce::ValueTree::fromXml (*params));

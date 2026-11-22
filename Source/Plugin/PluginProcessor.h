@@ -66,7 +66,8 @@ public:
         int mode = -1;
         int tempo = 0;
         int bars = 0;
-        juce::String length;   // orchestral cues: sketch | cue | full | extended
+        juce::String length;   // sketch | cue | full | extended
+        std::vector<pm::InstrumentChoice> instruments; // empty = the prompt / style decides
     };
 
     void generate (const juce::String& prompt);

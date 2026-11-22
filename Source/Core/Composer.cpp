@@ -2591,6 +2591,40 @@ Composition composeOnce (const StyleSpec& specIn, uint64_t seed)
         comp.tracks[i] = finalizeTrack (ctx, ts, std::move (notes), std::move (cc), post);
     }
 
+    // Parts written into another track (a solo piano's two hands) join it.
+    for (int i = (int) spec.tracks.size() - 1; i >= 0; --i)
+    {
+        const int into = spec.tracks[(size_t) i].mergeInto;
+
+        if (into < 0 || into >= (int) comp.tracks.size() || into == i || i >= (int) comp.tracks.size())
+            continue;
+
+        auto& dst = comp.tracks[(size_t) into];
+        auto& src = comp.tracks[(size_t) i];
+        dst.notes.insert (dst.notes.end(), src.notes.begin(), src.notes.end());
+        dst.controls.insert (dst.controls.end(), src.controls.begin(), src.controls.end());
+        std::stable_sort (dst.notes.begin(), dst.notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+        std::stable_sort (dst.controls.begin(), dst.controls.end(), [] (const ControlChange& a, const ControlChange& b) { return a.tick < b.tick; });
+
+        // One hand must not hold a key the other strikes again.
+        for (size_t a = 0; a < dst.notes.size(); ++a)
+            for (size_t b = a + 1; b < dst.notes.size() && dst.notes[b].start < dst.notes[a].start + dst.notes[a].length; ++b)
+                if (dst.notes[b].pitch == dst.notes[a].pitch)
+                {
+                    if (dst.notes[b].start > dst.notes[a].start)
+                        dst.notes[a].length = dst.notes[b].start - dst.notes[a].start;
+                    else
+                        dst.notes[b].length = 0; // same key, same moment: one strike
+                }
+
+        dst.notes.erase (std::remove_if (dst.notes.begin(), dst.notes.end(), [] (const Note& n) { return n.length <= 0; }), dst.notes.end());
+
+        if (dst.role != Role::Melody && src.role == Role::Melody)
+            dst.role = Role::Melody;
+
+        comp.tracks.erase (comp.tracks.begin() + i);
+    }
+
     return comp;
 }
 

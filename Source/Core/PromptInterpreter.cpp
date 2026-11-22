@@ -1103,6 +1103,27 @@ void chooseLearnedHarmony (StyleSpec& spec, Rng& rng, double probability, std::v
     }
 }
 
+/** Quarter notes per bar, for turning a length in seconds into bars. */
+int quartersPerBar (const StyleSpec& s)
+{
+    return std::max (1, s.tsNum * 4 / std::max (1, s.tsDen));
+}
+
+/** Songs follow the Length control too: sketch 16 bars, cue ~70 s, full ~2.5 min, extended ~4 min. */
+void applySongLength (StyleSpec& spec, const std::string& length)
+{
+    if (length == "sketch")
+    {
+        spec.bars = 16;
+        return;
+    }
+
+    const double seconds = length == "cue" ? 70.0 : length == "full" ? 150.0 : length == "extended" ? 225.0 : 0.0;
+
+    if (seconds > 0.0)
+        spec.bars = std::max (8, std::min (128, 4 * (int) std::lround (seconds * spec.tempo / 60.0 / quartersPerBar (spec) / 4.0)));
+}
+
 std::string lowerCopy (std::string s)
 {
     for (auto& c : s)
@@ -1178,6 +1199,324 @@ int familyOf (int program)
 } // namespace
 
 //==============================================================================
+//==============================================================================
+// Instrument picker
+
+namespace
+{
+    bool isPolyphonicProgram (int p)
+    {
+        return (p >= 0 && p <= 21) || (p >= 24 && p <= 31) || p == 46 || (p >= 48 && p <= 54) || p == 61
+            || (p >= 88 && p <= 95) || p == 90 || p == 105 || p == 107 || p == 108;
+    }
+
+    bool isArpeggioProgram (int p) { return p == 46 || p == 8 || p == 12 || p == 105 || p == 107 || p == 108 || p == 10; }
+    bool isPadProgram (int p)      { return (p >= 48 && p <= 54) || (p >= 88 && p <= 95) || p == 19; }
+    bool isBassProgram (int p)     { return (p >= 32 && p <= 39) || p == 43 || p == 58; }
+
+    bool isLeadProgram (int p)
+    {
+        static const std::set<int> leads { 40, 56, 60, 64, 65, 66, 68, 69, 71, 73, 74, 75, 77, 78, 79, 81, 22, 104, 109, 110, 114, 52 };
+        return leads.count (p) > 0;
+    }
+
+    std::string cleanName (std::string n)
+    {
+        return lowerCopy (n);
+    }
+}
+
+const std::vector<CatalogueEntry>& instrumentCatalogue()
+{
+    static const std::vector<CatalogueEntry> list = []
+    {
+        std::vector<CatalogueEntry> out;
+        auto addPart = [&] (const char* category, const char* id)
+        {
+            for (auto& p : standardParts())
+                if (std::string (p.first) == id)
+                {
+                    const auto& t = p.second;
+                    // Named string sections (Violins I, Celli...) are melodic parts; harp and choir are chordal.
+                    const bool section = ((t.program >= 40 && t.program <= 44) || (t.program >= 48 && t.program <= 51))
+                                      && std::string (t.name).find ("Strings") == std::string::npos;
+                    out.push_back ({ category, t.name, t.role == Role::Percussion ? -1 : t.program, t.low, t.high, t.role, t.pattern,
+                                     isPolyphonicProgram (t.program) && t.role != Role::Percussion && ! section });
+                }
+        };
+
+        for (auto* id : { "vln1", "vln2", "vla", "vc", "cb", "solovn", "solovc", "pizz" })    addPart ("Strings", id);
+        for (auto* id : { "picc", "fl", "ob", "cl", "bn" })                                   addPart ("Woodwinds", id);
+        for (auto* id : { "hn", "tpt", "tbn", "tba" })                                        addPart ("Brass", id);
+        for (auto* id : { "timp", "bd", "cym", "sn", "taiko", "tam", "tri" })                 addPart ("Orchestral percussion", id);
+        for (auto* id : { "harp", "cel", "glock", "choir" })                                  addPart ("Harp, celesta & choir", id);
+
+        struct G { const char* category; const char* name; };
+        static const G general[] = {
+            { "Keys", "Piano" }, { "Keys", "Electric Piano" }, { "Keys", "Harpsichord" }, { "Keys", "Organ" }, { "Keys", "Rock Organ" },
+            { "Keys", "Accordion" }, { "Keys", "Vibraphone" }, { "Keys", "Marimba" }, { "Keys", "Music Box" }, { "Keys", "Bells" },
+            { "Guitars & bass", "Acoustic Guitar" }, { "Guitars & bass", "Nylon Guitar" }, { "Guitars & bass", "Electric Guitar" },
+            { "Guitars & bass", "Jazz Guitar" }, { "Guitars & bass", "Distortion Guitar" }, { "Guitars & bass", "Bass" },
+            { "Guitars & bass", "Upright Bass" }, { "Guitars & bass", "Synth Bass" }, { "Guitars & bass", "808 Bass" },
+            { "Synths", "Synth Lead" }, { "Synths", "Poly Synth" }, { "Synths", "Warm Pad" }, { "Synths", "Synth Brass" },
+            { "Solo & world", "Alto Sax" }, { "Solo & world", "Tenor Sax" }, { "Solo & world", "Fiddle" }, { "Solo & world", "Whistle" },
+            { "Solo & world", "Recorder" }, { "Solo & world", "Pan Flute" }, { "Solo & world", "Shakuhachi" }, { "Solo & world", "Ocarina" },
+            { "Solo & world", "Harmonica" }, { "Solo & world", "Bagpipe" }, { "Solo & world", "Sitar" }, { "Solo & world", "Koto" },
+            { "Solo & world", "Banjo" }, { "Solo & world", "Kalimba" }, { "Solo & world", "Lute" }, { "Solo & world", "Steel Drums" },
+            { "Drums", "Drums" },
+        };
+
+        for (auto& g : general)
+            for (auto& inst : instruments())
+                if (std::string (inst.name) == g.name)
+                {
+                    out.push_back ({ g.category, inst.name, inst.program, inst.low, inst.high, inst.role, inst.pattern,
+                                     inst.program >= 0 && isPolyphonicProgram (inst.program) });
+                    break;
+                }
+
+        return out;
+    }();
+
+    return list;
+}
+
+void applyInstrumentChoices (StyleSpec& spec, const std::vector<InstrumentChoice>& choices)
+{
+    if (choices.empty())
+        return;
+
+    const auto previous = spec.tracks;
+    const auto& cat = instrumentCatalogue();
+
+    auto entryFor = [&] (const InstrumentChoice& c) -> CatalogueEntry
+    {
+        for (auto& e : cat)
+            if (cleanName (e.name) == cleanName (c.name))
+                return e;
+
+        CatalogueEntry e;
+        e.name = c.name;
+        e.program = c.program;
+        e.role = c.program < 0 ? Role::Percussion : Role::Melody;
+        e.pattern = "auto";
+        e.polyphonic = c.program >= 0 && isPolyphonicProgram (c.program);
+        int lo = 36, hi = 84;
+
+        if (c.program >= 0)
+            instrumentRange (c.program, lo, hi);
+
+        e.low = lo;
+        e.high = hi;
+        return e;
+    };
+
+    struct Part { CatalogueEntry e; Role role; bool fixed; std::string pattern; };
+    std::vector<Part> parts;
+
+    for (auto& c : choices)
+    {
+        Part p { entryFor (c), Role::Melody, false, "" };
+        Role r;
+
+        if (c.role != "auto" && ! c.role.empty() && roleFromString (c.role, r))
+        {
+            p.role = r;
+            p.fixed = true;
+        }
+
+        if (p.e.program < 0)
+        {
+            p.role = Role::Percussion;
+            p.fixed = true;
+        }
+
+        parts.push_back (p);
+    }
+
+    std::vector<size_t> pitched;
+
+    for (size_t i = 0; i < parts.size(); ++i)
+        if (parts[i].role != Role::Percussion)
+            pitched.push_back (i);
+
+    auto centre = [&] (size_t i) { return (parts[i].e.low + parts[i].e.high) / 2; };
+    auto taken = [&] (Role r) { return std::any_of (parts.begin(), parts.end(), [&] (const Part& p) { return p.fixed && p.role == r; }); };
+
+    // 1. The tune: the most melodic instrument in a singing register.
+    if (! taken (Role::Melody) && ! pitched.empty())
+    {
+        size_t best = pitched.front();
+        double bestScore = -1e9;
+
+        for (size_t i : pitched)
+        {
+            if (parts[i].fixed)
+                continue;
+
+            const int p = parts[i].e.program;
+            double sc = parts[i].e.polyphonic ? 1.0 : 3.0;
+            sc += isLeadProgram (p) ? 2.0 : 0.0;
+            sc += (centre (i) >= 60 && centre (i) <= 84) ? 1.0 : 0.0;
+            sc -= (centre (i) < 52 || isBassProgram (p) || p == 47) ? 5.0 : 0.0;
+
+            if (sc > bestScore)
+            {
+                bestScore = sc;
+                best = i;
+            }
+        }
+
+        if (! parts[best].fixed)
+        {
+            parts[best].role = Role::Melody;
+            parts[best].fixed = true;
+        }
+    }
+
+    // 2. The bass: a bass instrument, or with three or more parts the lowest one.
+    if (! taken (Role::Bass) && pitched.size() >= 2)
+    {
+        int best = -1;
+
+        for (size_t i : pitched)
+        {
+            if (parts[i].fixed)
+                continue;
+
+            const bool dedicated = isBassProgram (parts[i].e.program);
+            const bool low = centre (i) < 55 || parts[i].e.program == 70 || parts[i].e.program == 42;
+
+            if ((dedicated || (pitched.size() >= 3 && low)) && (best < 0 || centre (i) < centre ((size_t) best)))
+                best = (int) i;
+        }
+
+        if (best >= 0)
+        {
+            parts[(size_t) best].role = Role::Bass;
+            parts[(size_t) best].fixed = true;
+        }
+    }
+
+    // 3. Everyone else: by what the instrument does best.
+    bool counterGiven = taken (Role::CounterMelody);
+
+    for (size_t i : pitched)
+    {
+        auto& p = parts[i];
+
+        if (p.fixed)
+            continue;
+
+        const int prog = p.e.program;
+
+        if (prog == 47)                    { p.role = Role::Bass; p.pattern = "timpani"; }
+        else if (isArpeggioProgram (prog)) p.role = Role::Arpeggio;
+        else if (isPadProgram (prog))      p.role = Role::Pad;
+        else if (p.e.polyphonic)           p.role = Role::Chords;
+        else if (prog >= 56 && prog <= 63 && counterGiven) { p.role = Role::Chords; p.pattern = "block"; }
+        else if (! counterGiven)           { p.role = Role::CounterMelody; counterGiven = true; }
+        else                               { p.role = Role::Pad; }
+    }
+
+    // Build the tracks.
+    const bool solo = pitched.size() == 1;
+    std::vector<TrackSpec> tracks;
+
+    auto hint = [&] (const std::string& name) -> const TrackSpec*
+    {
+        for (auto& t : previous)
+            if (cleanName (t.name) == cleanName (name))
+                return &t;
+
+        return nullptr;
+    };
+
+    for (auto& p : parts)
+    {
+        TrackSpec ts;
+        ts.name = p.e.name;
+        ts.role = p.role;
+        ts.program = std::max (0, p.e.program);
+        ts.lowNote = p.e.low;
+        ts.highNote = p.e.high;
+        ts.velocity = p.role == Role::Melody ? 92 : (p.role == Role::Percussion ? 95 : 80);
+        ts.density = p.role == Role::Melody ? 0.5 : 0.45;
+        ts.pattern = ! p.pattern.empty() ? p.pattern : "auto";
+
+        if (p.role == Role::Percussion)
+        {
+            const auto n = cleanName (p.e.name);
+            ts.pattern = n.find ("taiko") != std::string::npos ? "tribal"
+                       : (n == "drums" ? (spec.orchestral ? std::string ("orchestral") : std::string ("auto")) : std::string ("orchestral"));
+        }
+
+        // Ringing arpeggios (harp, celesta, marimba) stay above the muddy register.
+        if (ts.role == Role::Arpeggio)
+            ts.lowNote = std::max (ts.lowNote, 45);
+
+        if (const auto* h = hint (ts.name))
+        {
+            if (h->role == ts.role)
+            {
+                ts.pattern = h->pattern;
+                ts.density = h->density;
+            }
+        }
+
+        // A keyboard, harp or guitar carrying the tune with nobody else to play the harmony
+        // plays both: the right hand sings, the left accompanies - on one track.
+        const bool harmonyElsewhere = std::any_of (parts.begin(), parts.end(), [] (const Part& q)
+            { return q.role == Role::Chords || q.role == Role::Pad || q.role == Role::Arpeggio; });
+
+        if ((solo || ! harmonyElsewhere) && p.role == Role::Melody && p.e.polyphonic)
+        {
+            TrackSpec right = ts;
+            right.lowNote = std::max (ts.lowNote, 60);
+            right.highNote = std::max (right.lowNote + 19, ts.highNote);
+            right.pattern = "lyrical";
+            tracks.push_back (right);
+
+            TrackSpec left = ts;
+            left.role = isArpeggioProgram (ts.program) ? Role::Arpeggio : Role::Chords;
+            left.lowNote = left.role == Role::Arpeggio ? std::max (ts.lowNote, 43) : ts.lowNote;
+            left.highNote = std::max (left.lowNote + 19, std::min (ts.highNote, 67));
+            left.pattern = left.role == Role::Arpeggio ? "updown" : (ts.program >= 24 && ts.program <= 31 ? "broken" : "broken");
+            left.velocity = 70;
+            left.mergeInto = (int) tracks.size() - 1;
+            tracks.push_back (left);
+            continue;
+        }
+
+        tracks.push_back (ts);
+    }
+
+    spec.tracks = tracks;
+
+    // A cue needs an ensemble; one or two instruments are composed as a piece for them.
+    if (pitched.size() < 3 && spec.orchestral)
+    {
+        spec.orchestral = false;
+        applySongLength (spec, spec.length == "auto" || spec.length.empty() ? std::string ("full") : spec.length);
+    }
+
+    std::string summary;
+
+    for (auto& t : spec.tracks)
+    {
+        if (t.mergeInto >= 0)
+            continue;
+
+        if (! summary.empty())
+            summary += ", ";
+
+        summary += t.name + " (" + roleDisplayName (t.role) + ")";
+    }
+
+    spec.interpretation.push_back ("Your instruments: " + summary);
+    normalizeSpec (spec);
+}
+
 StyleSpec varySpec (const StyleSpec& in, uint64_t seed, bool keepHarmony)
 {
     StyleSpec s = in;
@@ -2088,6 +2427,18 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
 
     if (spec.orchestral && ! soloMode)
         std::stable_sort (spec.tracks.begin(), spec.tracks.end(), [] (const TrackSpec& a, const TrackSpec& b) { return scoreOrder (a) < scoreOrder (b); });
+
+    if (! spec.orchestral && ! overrides.length.empty() && explicitBars == 0 && explicitSeconds <= 0.0)
+        applySongLength (spec, overrides.length);
+
+    // The user's own instruments replace the style's arrangement (keeping its harmony and feel).
+    if (! overrides.instruments.empty())
+    {
+        if (! overrides.length.empty())
+            spec.length = overrides.length;
+
+        applyInstrumentChoices (spec, overrides.instruments);
+    }
 
     if (spec.orchestral)
     {
