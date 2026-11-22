@@ -4,7 +4,7 @@
 
 #include "ClaudeClient.h"
 #include "Composition.h"
-#include "PreviewSynth.h"
+#include "PreviewEngine.h"
 #include "PromptInterpreter.h"
 #include "Settings.h"
 
@@ -129,6 +129,12 @@ public:
     void auditionNote (int trackIndex, int pitch, int velocity);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
 
+    /** The preview's sound (Settings): the built-in instruments, your SoundFont, or the sketch synth. */
+    void previewSoundChanged();
+    juce::String getPreviewSoundDescription() const          { return synth.getDescription(); }
+    bool isPreviewSampled() const                            { return synth.isSampled(); }
+    PreviewEngine& getPreviewEngine()                        { return synth; }
+
     /** For the editor's hints: how long since the host or audio device last asked for audio
         (a preview can't play without it), and whether that was while bypassed. */
     juce::uint32 getMsSinceLastAudio() const                 { return juce::Time::getMillisecondCounter() - lastBlockMs.load(); }
@@ -233,7 +239,7 @@ private:
     bool wasPlaying = false;
     std::array<std::array<uint8_t, 128>, 16> activeNotes {};
     juce::MidiBuffer generatedMidi, panicMidi;
-    PreviewSynth synth;
+    PreviewEngine synth;
     bool synthHadSound = false;
     bool stopPreviewSound = false;
     int silentBlocks = 0;

@@ -4,6 +4,7 @@
 #include "MidiFileWriter.h"
 #include "PromptInterpreter.h"
 #include "QualityCheck.h"
+#include "RequestCheck.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1067,6 +1068,222 @@ static void testCustomInstruments()
     }
 }
 
+static void testRequests()
+{
+    std::printf ("requests: the piece is what was asked for\n");
+
+    auto playing = [] (const Composition& c)
+    {
+        std::vector<const Track*> out;
+
+        for (auto& t : c.tracks)
+            if (! t.notes.empty())
+                out.push_back (&t);
+
+        return out;
+    };
+
+    auto onlyPrograms = [&] (const Composition& c, std::initializer_list<std::pair<int, int>> ranges, bool drumsAllowed)
+    {
+        for (auto* t : playing (c))
+        {
+            if (t->isDrum)
+            {
+                if (! drumsAllowed)
+                    return false;
+
+                continue;
+            }
+
+            bool ok = false;
+
+            for (auto& r : ranges)
+                ok = ok || (t->program >= r.first && t->program <= r.second);
+
+            if (! ok)
+                return false;
+        }
+
+        return true;
+    };
+
+    auto players = [&] (const Composition& c)
+    {
+        std::set<std::string> keys;
+
+        for (auto* t : playing (c))
+            keys.insert (instrumentKey (t->name, t->program, t->isDrum));
+
+        return (int) keys.size();
+    };
+
+    auto hasProgram = [&] (const Composition& c, int lo, int hi)
+    {
+        for (auto* t : playing (c))
+            if (! t->isDrum && t->program >= lo && t->program <= hi)
+                return true;
+
+        return false;
+    };
+
+    // Every one of these meets all its criteria, with several seeds.
+    const char* prompts[] = {
+        "Make me a soft piano midi", "a piano piece", "solo violin piece", "Sad piano ballad in D minor", "cello and piano duet",
+        "flute melody only", "string quartet in G major", "fast techno track at 140 bpm", "orchestral piece without percussion",
+        "30 second piano jingle", "waltz for piano", "jazz piano trio", "happy ukulele song", "dark ambient pad, no drums",
+        "a short harp lullaby", "epic choir and organ", "rock song with no guitar", "slow sad cello solo",
+        "Late night jazz combo with a tenor sax lead", "Lo-fi hip hop beat with a mellow electric piano, rainy night",
+        "Peaceful orchestral village theme with woodwinds and harp", "16 bars of funky bass and drums", "string trio",
+        "woodwind quintet", "trumpet and piano duet in Bb major", "a 45 second marimba loop", "just drums",
+        "2 minute orchestral adventure theme in E minor", "calm acoustic guitar in 6/8", "Gentle lullaby for music box and harp",
+    };
+
+    for (auto* p : prompts)
+    {
+        for (uint64_t seed : { 3ull, 29ull })
+        {
+            const auto spec = interpretPrompt (p, seed);
+            const auto c = compose (spec, seed);
+            CHECK (c.request.total() > 0);
+
+            if (! c.request.allMet())
+            {
+                std::printf ("  \"%s\" (seed %d) misses:", p, (int) seed);
+
+                for (auto& cr : c.request.criteria)
+                    if (! cr.met)
+                        std::printf (" [%s: %s]", cr.label.c_str(), cr.detail.c_str());
+
+                std::printf ("\n");
+            }
+
+            CHECK (c.request.allMet());
+        }
+    }
+
+    // ...and the notes really are what was asked for.
+    {
+        const auto c = compose (interpretPrompt ("waltz for piano", 5), 5);
+        CHECK (onlyPrograms (c, { { 0, 7 } }, false));
+        CHECK_EQ (c.tsNum, 3);
+    }
+    {
+        const auto c = compose (interpretPrompt ("jazz piano trio", 5), 5);
+        CHECK_EQ (players (c), 3);
+        CHECK (! hasProgram (c, 64, 67));        // no sax
+        CHECK (hasProgram (c, 0, 7));
+    }
+    {
+        const auto c = compose (interpretPrompt ("happy ukulele song", 5), 5);
+        bool ukulele = false;
+
+        for (auto* t : playing (c))
+            ukulele = ukulele || t->name.find ("Ukulele") != std::string::npos;
+
+        CHECK (ukulele);
+        CHECK_EQ (players (c), 1);
+    }
+    {
+        const auto c = compose (interpretPrompt ("orchestral piece without percussion", 5), 5);
+        CHECK (onlyPrograms (c, { { 0, 8 }, { 10, 10 }, { 15, 46 }, { 48, 111 } }, false));   // no drums, timpani or mallets
+        CHECK (c.title.find ("Percussion") == std::string::npos);
+    }
+    {
+        const auto c = compose (interpretPrompt ("rock song with no guitar", 5), 5);
+        CHECK (! hasProgram (c, 24, 31));
+        CHECK (c.title.find ("Guitar") == std::string::npos);
+    }
+    {
+        const auto c = compose (interpretPrompt ("epic choir and organ", 5), 5);
+        CHECK (onlyPrograms (c, { { 16, 20 }, { 52, 54 } }, false));
+    }
+    {
+        const auto c = compose (interpretPrompt ("30 second piano jingle", 5), 5);
+        CHECK (std::abs (c.seconds() - 30.0) <= 3.6);
+    }
+    {
+        const auto c = compose (interpretPrompt ("Sad piano ballad in D minor", 5), 5);
+        CHECK_EQ (c.keyRoot, 2);
+        CHECK (c.mode == Mode::Minor || c.mode == Mode::HarmonicMinor || c.mode == Mode::MelodicMinor);
+    }
+    {
+        const auto c = compose (interpretPrompt ("Late night jazz combo with a tenor sax lead", 5), 5);
+        bool saxLeads = false;
+
+        for (auto* t : playing (c))
+            saxLeads = saxLeads || (t->program == 66 && t->role == Role::Melody);
+
+        CHECK (saxLeads);
+    }
+    {
+        const auto c = compose (interpretPrompt ("16 bars of funky bass and drums", 5), 5);
+        CHECK (onlyPrograms (c, { { 32, 39 } }, true));
+        CHECK_EQ (c.bars, 16);
+    }
+    {
+        const auto c = compose (interpretPrompt ("string trio", 5), 5);
+        CHECK_EQ (players (c), 3);
+        CHECK (onlyPrograms (c, { { 40, 51 } }, false));
+    }
+
+    // Instruments that join a style rather than replace it.
+    {
+        const auto spec = interpretPrompt ("Lo-fi hip hop beat with a mellow electric piano, rainy night", 5);
+        CHECK (! spec.request.onlyThese);
+        CHECK (spec.tracks.size() >= 3);
+        const auto heroic = interpretPrompt ("Heroic main theme for an adventure game, triumphant brass and strings", 5);
+        CHECK (! heroic.request.onlyThese);
+        CHECK (heroic.tracks.size() >= 10);
+    }
+
+    // The check catches a piece that isn't what was asked for.
+    {
+        const auto spec = interpretPrompt ("a piano piece", 5);
+        auto c = compose (spec, 5);
+        Track drums;
+        drums.name = "Drums";
+        drums.isDrum = true;
+        drums.channel = 9;
+
+        for (int i = 0; i < 16; ++i)
+            drums.notes.push_back ({ i * 480, 120, 36, 100 });
+
+        c.tracks.push_back (drums);
+        const auto report = checkRequest (c, spec.request);
+        CHECK (! report.allMet());
+        CHECK (report.criteria.front().label == "Only piano" && ! report.criteria.front().met);
+
+        c.tempo = 200;
+        Request fast = spec.request;
+        fast.tempo = 90;
+        CHECK (! checkRequest (c, fast).allMet());
+    }
+
+    // Your own instruments are the request.
+    {
+        PromptOverrides o;
+        InstrumentChoice flute;
+        flute.name = "Flute";
+        flute.program = 73;
+        o.instruments = { flute };
+        const auto spec = interpretPrompt ("epic orchestral battle", 5, o);
+        CHECK (spec.request.onlyThese);
+        CHECK_EQ ((int) spec.request.instruments.size(), 1);
+        CHECK (compose (spec, 5).request.allMet());
+    }
+
+    // The controls are criteria too.
+    {
+        PromptOverrides o;
+        o.keyRoot = 9;
+        o.tempo = 133;
+        const auto c = compose (interpretPrompt ("happy pop song", 5, o), 5);
+        CHECK_EQ (c.keyRoot, 9);
+        CHECK_EQ (c.tempo, 133);
+        CHECK (c.request.allMet());
+    }
+}
+
 int main()
 {
     testChordParsing();
@@ -1082,6 +1299,7 @@ int main()
     testLearnedModels();
     testVariationsDiffer();
     testCustomInstruments();
+    testRequests();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

@@ -1,4 +1,5 @@
 #include "PromptInterpreter.h"
+#include "RequestCheck.h"
 #include "Learned.h"
 #include "Rng.h"
 
@@ -856,7 +857,25 @@ const std::vector<Instrument>& instruments()
         { { "jazz guitar" },                                       "Jazz Guitar",    26, R::Chords,         45, 76, "comp",    false, 26, 26 },
         { { "electric guitar", "clean guitar" },                   "Electric Guitar", 27, R::Chords,        45, 76, "strum",   false, 27, 28 },
         { { "distorted guitar", "distortion", "heavy guitar" },    "Distortion Guitar", 30, R::Chords,      40, 64, "power",   false, 29, 30 },
-        { { "lute" },                                              "Lute",           24, R::Arpeggio,       45, 76, "updown",  false, 24, 24 },
+        { { "lute" },                                              "Lute",           24, R::Arpeggio,       45, 76, "updown",  false, -2, -2 },
+        { { "ukulele", "ukelele", "uke" },                         "Ukulele",        24, R::Chords,         60, 81, "strum",   false, -2, -2 },
+        { { "mandolin", "mandolins" },                             "Mandolin",       25, R::Melody,         55, 88, "rhythmic", false, -2, -2 },
+        { { "bouzouki", "balalaika" },                             "Bouzouki",       25, R::Chords,         50, 81, "strum",   false, -2, -2 },
+        { { "clavinet", "clav" },                                  "Clavinet",        7, R::Chords,         48, 76, "comp",    false, 7, 7 },
+        { { "honky tonk", "honky tonk piano", "saloon piano" },    "Honky-tonk Piano", 3, R::Chords,        43, 79, "broken",  false, 3, 3 },
+        { { "toy piano" },                                         "Toy Piano",       8, R::Melody,         67, 96, "lyrical", false, -2, -2 },
+        { { "dulcimer", "hammered dulcimer", "cimbalom", "santur", "zither" }, "Dulcimer", 15, R::Arpeggio, 55, 91, "updown",  false, 15, 15 },
+        { { "harmonium", "reed organ", "pump organ" },             "Harmonium",      20, R::Pad,            48, 84, "sustain", false, 20, 20 },
+        { { "synth strings", "string synth" },                     "Synth Strings",  50, R::Pad,            48, 84, "sustain", false, 50, 51 },
+        { { "flugelhorn", "cornet" },                              "Flugelhorn",     56, R::Melody,         55, 79, "lyrical", false, -2, -2 },
+        { { "euphonium", "baritone horn" },                        "Euphonium",      58, R::CounterMelody,  40, 70, "auto",    false, -2, -2 },
+        { { "baritone sax", "bari sax" },                          "Baritone Sax",   67, R::Bass,           36, 67, "auto",    false, 67, 67 },
+        { { "bass clarinet" },                                     "Bass Clarinet",  71, R::CounterMelody,  38, 70, "auto",    false, -2, -2 },
+        { { "contrabassoon", "contra bassoon" },                   "Contrabassoon",  70, R::Bass,           22, 53, "auto",    false, -2, -2 },
+        { { "shamisen" },                                          "Shamisen",      106, R::Melody,         50, 84, "rhythmic", false, 106, 106 },
+        { { "erhu" },                                              "Erhu",          110, R::Melody,         55, 91, "lyrical", false, -2, -2 },
+        { { "guzheng", "zheng" },                                  "Guzheng",       107, R::Arpeggio,       48, 84, "random",  false, -2, -2 },
+        { { "handpan", "hang drum", "tongue drum" },               "Handpan",       114, R::Arpeggio,       55, 79, "updown",  false, -2, -2 },
         { { "upright bass", "double bass", "contrabass", "acoustic bass" }, "Upright Bass", 32, R::Bass,    28, 52, "auto",    false, 32, 32 },
         { { "synth bass", "bassline" },                            "Synth Bass",     38, R::Bass,           28, 52, "auto",    false, 38, 39 },
         { { "808", "808s" },                                       "808 Bass",       38, R::Bass,           24, 48, "808",     false, 38, 38 },
@@ -900,7 +919,9 @@ const std::vector<Instrument>& instruments()
         { { "bagpipe", "bagpipes" },                               "Bagpipe",       109, R::Melody,         62, 81, "lyrical", false, 109, 109 },
         { { "fiddle" },                                            "Fiddle",        110, R::Melody,         55, 91, "rhythmic", false, 110, 110 },
         { { "steel drums", "steel drum", "steelpan", "steel pan" }, "Steel Drums",  114, R::Melody,         60, 86, "rhythmic", false, 114, 114 },
-        { { "taiko" },                                             "Taiko",          -1, R::Percussion,     35, 81, "tribal",  false, -1, -1 },
+        { { "taiko", "taiko drums", "taiko drum" },               "Taiko",          -1, R::Percussion,     35, 81, "tribal",  false, -1, -1 },
+        { { "hand percussion", "hand drums", "congas", "conga", "bongos", "bongo", "djembe", "tabla", "cajon", "tambourine", "shaker", "shakers" },
+                                                                   "Hand Percussion", -1, R::Percussion,    35, 81, "auto",    false, -1, -1 },
         { { "drum kit", "drums", "drum", "percussion", "beat", "beats", "drumbeat" }, "Drums", -1, R::Percussion, 35, 81, "auto", true, -1, -1 },
     };
 
@@ -1263,7 +1284,10 @@ const std::vector<CatalogueEntry>& instrumentCatalogue()
             { "Solo & world", "Recorder" }, { "Solo & world", "Pan Flute" }, { "Solo & world", "Shakuhachi" }, { "Solo & world", "Ocarina" },
             { "Solo & world", "Harmonica" }, { "Solo & world", "Bagpipe" }, { "Solo & world", "Sitar" }, { "Solo & world", "Koto" },
             { "Solo & world", "Banjo" }, { "Solo & world", "Kalimba" }, { "Solo & world", "Lute" }, { "Solo & world", "Steel Drums" },
-            { "Drums", "Drums" },
+            { "Solo & world", "Ukulele" }, { "Solo & world", "Mandolin" }, { "Solo & world", "Dulcimer" }, { "Solo & world", "Erhu" },
+            { "Solo & world", "Guzheng" }, { "Solo & world", "Shamisen" }, { "Solo & world", "Handpan" },
+            { "Keys", "Clavinet" }, { "Keys", "Harmonium" }, { "Solo & world", "Flugelhorn" }, { "Solo & world", "Euphonium" },
+            { "Solo & world", "Baritone Sax" }, { "Drums", "Drums" }, { "Drums", "Hand Percussion" },
         };
 
         for (auto& g : general)
@@ -1709,6 +1733,7 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
     //==========================================================================
     // 3. Explicit parameters
     int explicitTempo = -1, explicitBars = -1, explicitKey = -1;
+    bool meterRequested = false;
     double explicitSeconds = -1.0;
     bool haveExplicitMode = false;
     Mode explicitMode = Mode::Major;
@@ -1737,12 +1762,13 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
             const auto slash = t.find ('/');
             spec.tsNum = std::atoi (t.substr (0, slash).c_str());
             spec.tsDen = std::atoi (t.substr (slash + 1).c_str());
+            meterRequested = true;
         }
     }
 
-    if (hasWord ("waltz") || hasWord ("minuet"))   { spec.tsNum = 3; spec.tsDen = 4; }
-    if (hasWord ("jig"))                           { spec.tsNum = 6; spec.tsDen = 8; }
-    if (hasWord ("reel") || hasWord ("hornpipe"))  { spec.tsNum = 4; spec.tsDen = 4; }
+    if (hasWord ("waltz") || hasWord ("minuet"))   { spec.tsNum = 3; spec.tsDen = 4; meterRequested = true; }
+    if (hasWord ("jig"))                           { spec.tsNum = 6; spec.tsDen = 8; meterRequested = true; }
+    if (hasWord ("reel") || hasWord ("hornpipe"))  { spec.tsNum = 4; spec.tsDen = 4; meterRequested = true; }
 
     // Key: "in D minor", "C# major", "key of Eb", "f sharp minor", "in G"
     std::vector<bool> titleSkip ((size_t) nt, false);
@@ -1825,6 +1851,8 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
         explicitMode = (Mode) overrides.mode;
         haveExplicitMode = true;
     }
+
+    const bool modeRequested = haveExplicitMode;   // asked for in words or with the Scale control
 
     // Region / culture words that imply a scale.
     if (! haveExplicitMode)
@@ -1955,7 +1983,7 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
     }
 
     // Find instrument mentions (longest phrases first) and whether they are negated.
-    struct Mention { const Instrument* inst; int pos; bool negated; };
+    struct Mention { const Instrument* inst; int pos; int words; bool negated; std::string phrase; bool additive = false, forPrefix = false, lead = false; };
     std::vector<Mention> mentions;
 
     {
@@ -2001,7 +2029,7 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
                     }
                 }
 
-                mentions.push_back ({ ph.second.first, pos, negated });
+                mentions.push_back ({ ph.second.first, pos, ph.first, negated, ph.second.second });
             }
         }
 
@@ -2009,17 +2037,171 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
     }
 
     std::vector<std::string> added, removed, changed;
-    bool anyPositivePitched = false;
+    bool anyPositivePitched = false, anyPositive = false;
 
+    // How each instrument was asked for: "with a harp" adds it, "for cello and piano" and
+    // "a piano piece" make the piece for it, "tenor sax lead" gives it the tune.
     for (auto& m : mentions)
-        if (! m.negated && m.inst->program >= 0)
-            anyPositivePitched = true;
+    {
+        static const std::set<std::string> additions { "with", "featuring", "feat", "ft", "plus", "including", "add", "adding", "backed", "and a" };
+        static const std::set<std::string> skippable { "a", "an", "the", "solo", "two", "some", "lone", "single", "one", "and", "&" };
 
-    // "only piano and cello" / "just strings" / "solo violin" restrict the arrangement to what was named.
-    // A bare "solo" inside a genre prompt ("rock with a guitar solo") does not.
-    const bool strongSolo = hasWord ("only") || hasWord ("just") || hasWord ("unaccompanied") || hasWord ("alone");
-    const bool weakSolo = hasWord ("solo") && (defaulted || std::string (style->id) == "solo_piano" || std::string (style->id) == "classical");
-    const bool soloMode = anyPositivePitched && (strongSolo || weakSolo);
+        for (int back = m.pos - 1; back >= std::max (0, m.pos - 6); --back)
+        {
+            const auto& tok = tokens[(size_t) back];
+
+            if (tok == ",")
+                break;
+
+            if (additions.count (tok) > 0)
+            {
+                m.additive = true;
+                break;
+            }
+        }
+
+        for (int back = m.pos - 1; back >= std::max (0, m.pos - 4); --back)
+        {
+            const auto& tok = tokens[(size_t) back];
+
+            if (tok == "for")
+            {
+                m.forPrefix = true;
+                break;
+            }
+
+            const bool earlierInstrument = std::any_of (mentions.begin(), mentions.end(), [&] (const Mention& o) { return back >= o.pos && back < o.pos + o.words; });
+
+            if (skippable.count (tok) == 0 && ! earlierInstrument)
+                break;
+        }
+
+        const int after = m.pos + m.words;
+
+        for (int k = after; k < std::min (nt, after + 2); ++k)
+        {
+            const auto& tok = tokens[(size_t) k];
+
+            if (tok == "lead" || tok == "leads" || tok == "solo" || tok == "solos" || tok == "melody" || tok == "melodies" || tok == "theme")
+                m.lead = true;
+
+            if (tok == ",")
+                break;
+        }
+
+        if (m.pos > 0 && (tokens[(size_t) m.pos - 1] == "featuring" || tokens[(size_t) m.pos - 1] == "lead"))
+            m.lead = true;
+
+        if (! m.negated)
+        {
+            anyPositive = true;
+            anyPositivePitched = anyPositivePitched || m.inst->program >= 0;
+        }
+    }
+
+    // A "for" list spreads over the whole list ("for cello and piano").
+    for (size_t i = 1; i < mentions.size(); ++i)
+        if (mentions[i - 1].forPrefix && ! mentions[i].negated && mentions[i].pos - (mentions[i - 1].pos + mentions[i - 1].words) <= 2)
+            mentions[i].forPrefix = true;
+
+    // Ensembles: "duet", "trio", "string quartet"...
+    int ensembleSize = 0;
+    int ensembleWordPos = -1;
+
+    {
+        static const std::pair<const char*, int> sizes[] = { { "duo", 2 }, { "duet", 2 }, { "trio", 3 }, { "quartet", 4 }, { "quintet", 5 }, { "sextet", 6 } };
+
+        for (auto& sz : sizes)
+            for (int pos : findPhrase (tokens, sz.first))
+            {
+                ensembleSize = sz.second;
+                ensembleWordPos = pos;
+            }
+    }
+
+    // The piece is for the named instruments alone when the prompt says so ("only", "just", "solo",
+    // "for piano", "a piano piece", "cello and piano duet"), or when it names instruments without
+    // asking for a band, an orchestra or a genre that brings its own ("sad piano ballad",
+    // "epic choir and organ"). Instruments added "with" something ("lo-fi beat with a mellow
+    // electric piano") join the style's own arrangement instead.
+    bool onlyThese = false;
+
+    {
+        // Words that always bring an ensemble...
+        static const char* ensembleWords[] = {
+            "band", "orchestra", "orchestral", "symphonic", "symphony", "philharmonic", "ensemble", "combo", "group", "big band",
+            "beat", "beats", "full", "backing", "rhythm section", "orchestration"
+        };
+
+        // ...and genres that bring their own when the piece is a song or track in that genre
+        // ("rock song with no guitar"), but not when the instruments are what's described
+        // ("funky bass and drums", "jazz piano", "ambient piano").
+        static const char* genreWords[] = {
+            "rock", "metal", "punk", "pop", "funk", "funky", "disco", "reggae", "ska", "hip hop", "hiphop", "rap", "trap",
+            "lofi", "lo fi", "techno", "house", "edm", "trance", "dubstep", "drum and bass", "dnb", "synthwave", "retrowave",
+            "outrun", "country", "bluegrass", "latin", "salsa", "bossa", "samba", "tango", "ambient", "chillout", "chillwave",
+            "electronic", "dance", "soundtrack", "cinematic", "trailer", "marching", "mariachi", "gospel", "rnb", "r&b", "soul",
+            "fusion", "swing", "bebop", "chiptune", "8 bit", "8bit", "video game", "jazz", "blues", "celtic", "folk"
+        };
+
+        static const char* pieceNouns[] = { "song", "track", "tune", "music", "groove", "jam", "number", "anthem", "instrumental", "theme", "loop" };
+
+        bool band = false, genre = false, pieceNoun = false;
+
+        for (auto* w : ensembleWords)
+            band = band || hasWord (w);
+
+        for (auto* w : genreWords)
+            genre = genre || hasWord (w);
+
+        for (auto* w : pieceNouns)
+            pieceNoun = pieceNoun || hasWord (w);
+
+        band = band || (genre && pieceNoun);
+
+        int positivePitched = 0, forCount = 0, plainCount = 0;
+        bool familyEnsemble = false;
+
+        for (auto& m : mentions)
+        {
+            if (m.negated)
+                continue;
+
+            positivePitched += m.inst->program >= 0 ? 1 : 0;
+            forCount += m.forPrefix ? 1 : 0;
+            plainCount += m.additive ? 0 : 1;
+
+            // "string quartet", "brass quintet", "piano trio": the ensemble word right after the family
+            if (ensembleWordPos == m.pos + m.words && m.inst->generic)
+                familyEnsemble = true;
+        }
+
+        // In an orchestral style, orchestral instruments are named to feature them ("heroic theme,
+        // triumphant brass and strings"), not to make a piece for them alone.
+        bool allOrchestral = positivePitched > 0;
+
+        for (auto& m : mentions)
+        {
+            if (m.negated)
+                continue;
+
+            const int p = m.inst->program;
+            const bool orch = p < 0 || (p >= 40 && p <= 61) || (p >= 68 && p <= 73) || p == 8 || p == 9 || p == 14;
+            allOrchestral = allOrchestral && orch;
+        }
+
+        if (style->orchestral && allOrchestral)
+            band = true;
+
+        const bool strongSolo = hasWord ("only") || hasWord ("just") || hasWord ("unaccompanied") || hasWord ("alone");
+        const bool soloWord = hasWord ("solo") && ! band;
+        const bool pieceFor = forCount > 0;
+        const bool ensembleNamed = ensembleSize > 0 && (positivePitched == ensembleSize || familyEnsemble);
+
+        onlyThese = anyPositive && (strongSolo || soloWord || pieceFor || ensembleNamed || (! band && plainCount > 0 && ensembleSize == 0));
+    }
+
+    const bool soloMode = anyPositive && onlyThese;
 
     auto makeTrack = [] (const Instrument& inst, Role role, const char* nameSuffix) -> TrackSpec
     {
@@ -2035,18 +2217,146 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
         return ts;
     };
 
-    if (soloMode && anyPositivePitched)
+    // An instrument as the request names it, for matching tracks against.
+    auto needOf = [] (const Instrument& inst, const std::string& phrase) -> InstrumentNeed
+    {
+        InstrumentNeed n;
+        n.name = inst.name;
+        n.program = inst.program;
+        n.percussion = inst.program < 0;
+
+        for (auto* w : inst.words)
+            n.words.push_back (w);
+
+        if (inst.program >= 0 && inst.familyLow >= 0)
+            n.programs.push_back ({ inst.familyLow, inst.familyHigh });
+
+        const std::string name = inst.name;
+
+        // A generic word names what was asked for: "no guitar" rather than "no acoustic guitar".
+        if (inst.generic && ! phrase.empty() && name != "Drums" && name != "Strings" && name != "Woodwinds" && name != "Brass")
+        {
+            std::string word = phrase;
+            word[0] = (char) std::toupper ((unsigned char) word[0]);
+            n.name = word;
+        }
+
+        if (name == "Strings")
+        {
+            n.programs = { { 40, 51 } };
+            n.words = { "violin", "viola", "cello", "celli", "contrabass", "string" };
+        }
+        else if (name == "Woodwinds")
+        {
+            n.words = { "flute", "piccolo", "oboe", "clarinet", "bassoon", "woodwind", "english horn" };
+        }
+        else if (name == "Brass")
+        {
+            n.words = { "horn", "trumpet", "trombone", "tuba", "brass" };
+        }
+        else if (name == "Choir")
+        {
+            n.words = { "choir", "voice", "vocal", "aahs", "chorus", "singer" };
+        }
+        else if (name == "Drums" && phrase == "percussion")
+        {
+            // Percussion is more than drums: timpani and the mallets too.
+            n.name = "Percussion";
+            n.programs = { { 9, 9 }, { 11, 14 }, { 47, 47 }, { 112, 119 } };
+            n.words = { "timpani", "glockenspiel", "xylophone", "marimba", "vibraphone", "bells", "percussion" };
+        }
+
+        return n;
+    };
+
+    bool styleFits = soloMode && ! tracks.empty();
+
+    if (styleFits)
+    {
+        // The style may already be exactly what was asked for ("string quartet", "solo piano").
+        for (auto& p : tracks)
+            styleFits = styleFits && std::any_of (mentions.begin(), mentions.end(), [&] (const Mention& m)
+                        { return ! m.negated && trackIs (p.spec.name, p.spec.program, p.spec.role == Role::Percussion, needOf (*m.inst, m.phrase)); });
+
+        for (auto& m : mentions)
+            styleFits = styleFits && (m.negated || std::any_of (tracks.begin(), tracks.end(), [&] (const Planned& p)
+                        { return trackIs (p.spec.name, p.spec.program, p.spec.role == Role::Percussion, needOf (*m.inst, m.phrase)); }));
+    }
+
+    std::string styleChordPattern;
+
+    for (auto& tt : style->tracks)
+        if (tt.role == Role::Chords && styleChordPattern.empty())
+            styleChordPattern = tt.pattern;
+
+    if (soloMode && styleFits)
+    {
+        std::vector<std::string> names;
+
+        for (auto& m : mentions)
+            if (! m.negated && std::find (names.begin(), names.end(), std::string (m.inst->name)) == names.end())
+                names.push_back (m.inst->name);
+
+        spec.interpretation.push_back ("Arrangement: only " + joinList (names));
+    }
+    else if (soloMode)
     {
         // Only what was asked for.
         std::vector<Planned> solo;
         bool haveLead = false;
+        std::set<const Instrument*> placed;
 
         for (auto& m : mentions)
         {
-            if (m.negated)
+            if (m.negated || placed.count (m.inst) > 0)
                 continue;
 
+            placed.insert (m.inst);
             const Instrument& inst = *m.inst;
+
+            // A section word ("strings", "brass", "woodwinds") is the whole section, tune included.
+            static const std::map<std::string, std::vector<std::pair<const char*, Role>>> sections {
+                { "Strings",   { { "vln1", Role::Melody }, { "vln2", Role::CounterMelody }, { "vla", Role::Pad }, { "vc", Role::Pad }, { "cb", Role::Bass } } },
+                { "Brass",     { { "tpt", Role::Melody }, { "hn", Role::CounterMelody }, { "tbn", Role::Chords }, { "tba", Role::Bass } } },
+                { "Woodwinds", { { "fl", Role::Melody }, { "ob", Role::CounterMelody }, { "cl", Role::Pad }, { "bn", Role::Bass } } },
+            };
+
+            if (auto section = sections.find (inst.name); section != sections.end())
+            {
+                auto list = section->second;
+
+                // The classic quintets: a horn with the woodwinds, two trumpets in the brass.
+                if (ensembleSize == 5 && inst.name == std::string ("Woodwinds"))
+                    list.insert (list.begin() + 3, { "hn", Role::CounterMelody });
+
+                for (auto& part : list)
+                    for (auto& sp : standardParts())
+                    {
+                        if (std::string (sp.first) != part.first)
+                            continue;
+
+                        const auto& tt = sp.second;
+                        Role role = part.second;
+
+                        if (role == Role::Melody && haveLead)
+                            role = Role::CounterMelody;
+
+                        TrackSpec ts;
+                        ts.name = tt.name;
+                        ts.role = role;
+                        ts.program = tt.program;
+                        ts.lowNote = tt.low;
+                        ts.highNote = tt.high;
+                        ts.density = tt.density;
+                        ts.velocity = tt.velocity;
+                        ts.pattern = role == Role::Melody ? std::string ("lyrical") : (role == tt.role ? std::string (tt.pattern) : std::string ("auto"));
+                        solo.push_back ({ ts, 0, true });
+                        haveLead = haveLead || role == Role::Melody;
+                    }
+
+                added.push_back (inst.name);
+                continue;
+            }
 
             if (inst.program < 0)
             {
@@ -2074,6 +2384,15 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
                 acc.lowNote = inst.low;
                 acc.highNote = std::min (inst.high, 67);
                 acc.pattern = accRole == Role::Arpeggio ? "updown" : (std::string (inst.pattern) == "strum" ? "strum" : "broken");
+
+                // The style's own accompaniment figure where it suits ("waltz for piano" keeps the waltz).
+                if (accRole == Role::Chords && ! styleChordPattern.empty() && styleChordPattern != "auto")
+                {
+                    const auto& valid = patternsForRole (Role::Chords);
+
+                    if (std::find (valid.begin(), valid.end(), styleChordPattern) != valid.end())
+                        acc.pattern = styleChordPattern;
+                }
                 acc.velocity = 72;
                 acc.density = 0.5;
                 solo.push_back ({ acc, 0, true });
@@ -2425,6 +2744,19 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
     // Orchestral music is composed as a full cue (form, development, orchestration).
     spec.orchestral = style->orchestral || orchestralWanted;
 
+    // A piece for one or two named instruments is a piece for them, not an orchestral cue.
+    if (soloMode && ! styleFits)
+    {
+        std::set<std::string> players;
+
+        for (auto& p : tracks)
+            if (p.spec.role != Role::Percussion)
+                players.insert (instrumentKey (p.spec.name, p.spec.program, false));
+
+        if (players.size() < 3)
+            spec.orchestral = false;
+    }
+
     if (spec.orchestral && ! soloMode)
         std::stable_sort (spec.tracks.begin(), spec.tracks.end(), [] (const TrackSpec& a, const TrackSpec& b) { return scoreOrder (a) < scoreOrder (b); });
 
@@ -2481,9 +2813,130 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
         chooseLearnedHarmony (spec, hr, 0.65, {});
     }
 
+    //==========================================================================
+    // 8. The request: what was asked for, as criteria every take is checked against.
+    {
+        Request& req = spec.request;
+        static const std::set<std::string> negators { "no", "without", "minus", "except", "not", "zero", "lose", "remove", "skip" };
+
+        for (auto& m : mentions)
+        {
+            auto need = needOf (*m.inst, m.phrase);
+            need.lead = m.lead && ! m.negated;
+
+            // A woodwind quintet has a horn.
+            if (ensembleSize == 5 && need.name == "Woodwinds")
+            {
+                need.words.push_back ("horn");
+                need.programs.push_back ({ 60, 60 });
+            }
+            auto& list = m.negated ? req.excluded : req.instruments;
+            auto same = std::find_if (list.begin(), list.end(), [&] (const InstrumentNeed& n) { return n.name == need.name; });
+
+            if (same == list.end())
+                list.push_back (need);
+            else
+                same->lead = same->lead || need.lead;
+
+            // "Rock song with no guitar" isn't titled "Rock Guitar".
+            if (m.negated)
+            {
+                for (int k = m.pos; k < m.pos + m.words && k < nt; ++k)
+                    titleSkip[(size_t) k] = true;
+
+                for (int back = m.pos - 1; back >= std::max (0, m.pos - 3); --back)
+                    if (negators.count (tokens[(size_t) back]) > 0)
+                        titleSkip[(size_t) back] = true;
+            }
+        }
+
+        // Asked for and left out at once ("drums, but no drums"): leaving out wins.
+        req.instruments.erase (std::remove_if (req.instruments.begin(), req.instruments.end(), [&] (const InstrumentNeed& n)
+        {
+            return std::any_of (req.excluded.begin(), req.excluded.end(), [&] (const InstrumentNeed& e) { return e.name == n.name; });
+        }), req.instruments.end());
+
+        req.onlyThese = onlyThese && ! req.instruments.empty();
+        req.ensembleSize = ensembleSize;
+
+        if (! overrides.instruments.empty())
+        {
+            // Your own instruments are the ensemble.
+            req.instruments.clear();
+            req.excluded.clear();
+            req.ensembleSize = 0;
+
+            for (auto& c : overrides.instruments)
+            {
+                InstrumentNeed n;
+                n.name = c.name;
+                n.program = c.program;
+                n.percussion = c.program < 0;
+                n.words = { lowerCopy (c.name) };
+                n.lead = c.role == "melody";
+                req.instruments.push_back (n);
+            }
+
+            req.onlyThese = true;
+        }
+
+        req.keyRoot = explicitKey;
+        req.mode = modeRequested ? (int) explicitMode : -1;
+
+        if (req.mode < 0)
+        {
+            const bool sad = std::find (moodNames.begin(), moodNames.end(), "sad") != moodNames.end()
+                          || std::find (moodNames.begin(), moodNames.end(), "dark") != moodNames.end();
+            const bool happy = std::find (moodNames.begin(), moodNames.end(), "happy") != moodNames.end();
+            req.modeFeel = sad && ! happy ? -1 : (happy && ! sad ? 1 : 0);
+        }
+
+        const bool very = hasWord ("very");
+        req.tempo = explicitTempo > 0 ? explicitTempo : 0;
+
+        if (req.tempo == 0 && std::find (moodNames.begin(), moodNames.end(), "slow") != moodNames.end())
+            req.tempoMax = very ? 80 : 100;
+
+        if (req.tempo == 0 && std::find (moodNames.begin(), moodNames.end(), "fast") != moodNames.end())
+            req.tempoMin = very ? 140 : 116;
+
+        req.bars = explicitBars > 0 ? explicitBars : 0;
+        req.seconds = req.bars == 0 && explicitSeconds > 0.0 ? explicitSeconds : 0.0;
+
+        if (req.bars == 0 && req.seconds <= 0.0)
+        {
+            const std::string length = ! overrides.length.empty() ? overrides.length : std::string();
+
+            if (length == "sketch")          { req.maxSeconds = 75.0; }
+            else if (length == "cue")        { req.minSeconds = 35.0; req.maxSeconds = 110.0; }
+            else if (length == "full")       { req.minSeconds = 100.0; req.maxSeconds = 230.0; }
+            else if (length == "extended")   { req.minSeconds = 170.0; req.maxSeconds = 360.0; }
+            else if (hasWord ("short"))      { req.maxSeconds = 45.0; }
+            else if (hasWord ("long"))       { req.minSeconds = 90.0; }
+        }
+
+        if (meterRequested)
+        {
+            req.tsNum = spec.tsNum;
+            req.tsDen = spec.tsDen;
+        }
+
+        const bool soft = std::find (moodNames.begin(), moodNames.end(), "soft") != moodNames.end() || hasWord ("pianissimo");
+        const bool loud = hasWord ("loud") || hasWord ("powerful") || hasWord ("aggressive") || hasWord ("bombastic")
+                       || hasWord ("thunderous") || hasWord ("fortissimo");
+        req.loudness = soft && ! loud ? -1 : (loud && ! soft ? 1 : 0);
+
+        applyRequest (spec, req);
+    }
+
     spec.title = makeTitle (tokens, titleSkip, style->name);
     normalizeSpec (spec);
     return spec;
+}
+
+Request parseRequest (const std::string& prompt, const PromptOverrides& overrides)
+{
+    return interpretPrompt (prompt, 1, overrides).request;
 }
 
 } // namespace pm

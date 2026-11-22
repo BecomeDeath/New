@@ -19,7 +19,8 @@ public:
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
 };
 
-/** Settings shown in a call-out: Claude (API key, model, effort) and MIDI export articulations. */
+/** Settings shown in a call-out: Claude (API key, model, effort), the preview's sound and MIDI
+    export articulations. */
 class SettingsPanel : public juce::Component
 {
 public:
@@ -38,6 +39,14 @@ private:
     juce::TextEditor valuesEditor, controllerEditor;
     juce::String articulationOutputFor (int id) const;
     juce::TextButton saveButton { "Save" }, clearButton { "Remove key" };
+
+    juce::Label soundHeading, soundNote;
+    juce::ComboBox soundBox;
+    juce::String soundPath;      // your SoundFont, if chosen
+    int soundChoice = 1;
+    std::unique_ptr<juce::FileChooser> soundChooser;
+    void rebuildSoundBox();
+    juce::String soundSetting() const;
 };
 
 //==============================================================================
@@ -119,6 +128,7 @@ private:
 
     int animationFrame = 0;
     juce::uint32 previewStartedAt = 0;
+    juce::String shownSound;
     bool audioHintShown = false;
     int shownVersion = -1, shownPiece = -1;
     bool updatingControls = false;

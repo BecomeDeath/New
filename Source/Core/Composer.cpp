@@ -3,6 +3,7 @@
 #include "Learned.h"
 #include "CueEngine.h"
 #include "QualityCheck.h"
+#include "RequestCheck.h"
 #include "Rng.h"
 
 #include <algorithm>
@@ -2630,30 +2631,118 @@ Composition composeOnce (const StyleSpec& specIn, uint64_t seed)
 
 } // namespace
 
+namespace
+{
+    /** In a small ensemble everyone plays: a part the arrangement left silent gets a supporting
+        line - the chord roots for a bass instrument, otherwise a voice-led chord tone - from where
+        most of the others have come in. */
+    void fillIdleParts (Composition& c, const StyleSpec& spec)
+    {
+        int pitched = 0;
+
+        for (auto& t : c.tracks)
+            pitched += (! t.isDrum && t.splitFrom < 0) ? 1 : 0;
+
+        if ((pitched > 8 && ! spec.request.onlyThese) || c.chords.empty())
+            return;
+
+        for (size_t ti = 0; ti < c.tracks.size(); ++ti)
+        {
+            auto& t = c.tracks[ti];
+
+            if (t.isDrum || t.splitFrom >= 0 || ! t.notes.empty() || ti >= spec.tracks.size())
+                continue;
+
+            // Come in once most of the others have.
+            std::vector<int> entries;
+
+            for (auto& o : c.tracks)
+                if (&o != &t && ! o.isDrum && ! o.notes.empty())
+                    entries.push_back (o.notes.front().start);
+
+            if (entries.empty())
+                continue;
+
+            std::sort (entries.begin(), entries.end());
+            const int from = entries[entries.size() / 2];
+            const auto& ts = spec.tracks[ti];
+            int lo = ts.lowNote, hi = std::max (ts.lowNote + 12, ts.highNote);
+            const bool bass = ts.role == Role::Bass || hi <= 60;
+
+            if (! bass)
+                lo = std::max (lo, std::min (hi - 12, 48));
+
+            int prev = bass ? lo + 6 : (lo + hi) / 2;
+
+            for (auto& ch : c.chords)
+            {
+                if (ch.end <= from || ch.pcs.empty())
+                    continue;
+
+                int best = -1;
+
+                for (int p = lo; p <= hi; ++p)
+                {
+                    const int pc = ((p % 12) + 12) % 12;
+                    const bool tone = bass ? pc == ch.pcs.front() : std::find (ch.pcs.begin(), ch.pcs.end(), pc) != ch.pcs.end();
+
+                    if (tone && (best < 0 || std::abs (p - prev) < std::abs (best - prev)))
+                        best = p;
+                }
+
+                if (best < 0)
+                    continue;
+
+                Note n;
+                n.start = std::max (ch.start, from);
+                n.length = std::max (60, ch.end - n.start - 20);
+                n.pitch = best;
+                n.velocity = std::max (40, std::min (110, ts.velocity - 12));
+                n.articulation = Articulation::Sustain;
+                t.notes.push_back (n);
+                prev = best;
+            }
+        }
+    }
+}
+
 Composition compose (const StyleSpec& spec, uint64_t seed)
 {
-    // Every generation is checked: several takes are composed, mechanically repaired where
-    // possible, scored, and the best one is kept. Deterministic for a given seed.
-    const int takes = spec.orchestral ? 4 : 3;
+    // Every generation is checked twice over: against the request - what the prompt asked for
+    // (RequestCheck.h) - and for craft (QualityCheck.h). Several drafts are composed and the best
+    // kept; a draft that misses a criterion only wins when no draft meets them all, and more
+    // drafts are tried before settling for that. Deterministic for a given seed.
+    const int drafts = spec.orchestral ? 4 : 3;
+    const int maxDrafts = drafts + 5;
     Composition best;
     double bestScore = -1.0;
-    int tried = 0;
+    int bestMet = -1, tried = 0;
 
-    for (int k = 0; k < takes; ++k)
+    for (int k = 0; k < maxDrafts; ++k)
     {
+        const bool requestMet = bestMet >= 0 && bestMet == best.request.total();
+
+        if (k >= drafts && requestMet)
+            break;
+
         const uint64_t takeSeed = k == 0 ? seed : seed * 0x9E3779B97F4A7C15ull + (uint64_t) k * 0x632BE59BD9B4E019ull;
         Composition c = spec.orchestral ? composeCue (spec, takeSeed) : composeOnce (spec, takeSeed);
+        fillIdleParts (c, spec);
         repairComposition (c);
         c.quality = checkQuality (c);
+        c.request = checkRequest (c, spec.request);
         ++tried;
 
-        if (c.quality.score > bestScore + 1e-9)
+        const int met = c.request.met();
+
+        if (met > bestMet || (met == bestMet && c.quality.score > bestScore + 1e-9))
         {
+            bestMet = met;
             bestScore = c.quality.score;
             best = std::move (c);
         }
 
-        if (bestScore >= 9.95)
+        if (bestMet == best.request.total() && bestScore >= 9.95)
             break;
     }
 

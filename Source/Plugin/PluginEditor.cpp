@@ -141,6 +141,7 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
         settings.setArticulationOutput (articulationOutputFor (articulationBox.getSelectedId()));
         settings.setArticulationValues (valuesEditor.getText());
         settings.setArticulationController (controllerEditor.getText().getIntValue());
+        settings.setPreviewSound (soundSetting());
 
         if (onSaved)
             onSaved();
@@ -204,13 +205,81 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
                         "Exported and dragged MIDI then keeps each section on one track.",
                         juce::dontSendNotification);
 
+    // Preview sound
+    styleLabel (soundHeading, 16.0f, Theme::text, true);
+    soundHeading.setText ("Preview sound", juce::dontSendNotification);
+    styleLabel (soundNote, 12.0f, Theme::textDim);
+    soundNote.setJustificationType (juce::Justification::topLeft);
+    soundNote.setText ("Heard only inside PromptMIDI. The instruments are GeneralUser GS by S. Christian Collins, a General MIDI "
+                       "SoundFont; your own .sf2 works too (or put it in " + SoundBank::userSoundFontFolder().getFullPathName() + ").",
+                       juce::dontSendNotification);
+
+    {
+        const auto current = settings.getPreviewSound();
+        soundChoice = current == "sketch" ? 2 : (current.isNotEmpty() ? 3 : 1);
+        soundPath = soundChoice == 3 ? current : juce::String();
+        rebuildSoundBox();
+    }
+
+    soundBox.onChange = [this]
+    {
+        const int id = soundBox.getSelectedId();
+
+        if (id != 4)
+        {
+            soundChoice = id;
+            return;
+        }
+
+        // Choose a SoundFont file.
+        soundChooser = std::make_unique<juce::FileChooser> ("Choose a SoundFont", SoundBank::userSoundFontFolder(), "*.sf2");
+        juce::Component::SafePointer<SettingsPanel> safe (this);
+        soundChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                   [safe] (const juce::FileChooser& fc)
+                                   {
+                                       if (safe == nullptr)
+                                           return;
+
+                                       const auto file = fc.getResult();
+
+                                       if (file.existsAsFile())
+                                       {
+                                           safe->soundPath = file.getFullPathName();
+                                           safe->soundChoice = 3;
+                                       }
+
+                                       safe->rebuildSoundBox();
+                                   });
+    };
+
+    for (auto* c : std::initializer_list<juce::Component*> { &soundHeading, &soundNote, &soundBox })
+        addAndMakeVisible (c);
+
     for (auto* c : std::initializer_list<juce::Component*> { &heading, &keyLabel, &modelLabel, &effortLabel, &note,
                                                              &keyEditor, &modelEditor, &effortBox, &saveButton, &clearButton,
                                                              &exportHeading, &articulationLabel, &valuesLabel, &controllerLabel,
                                                              &exportNote, &articulationBox, &valuesEditor, &controllerEditor })
         addAndMakeVisible (c);
 
-    setSize (500, 560);
+    setSize (520, 650);
+}
+
+void SettingsPanel::rebuildSoundBox()
+{
+    soundBox.clear (juce::dontSendNotification);
+    soundBox.addItem ("Instruments - GeneralUser GS (General MIDI)", 1);
+    soundBox.addItem ("Sketch synth (lightest on the CPU)", 2);
+
+    if (soundPath.isNotEmpty())
+        soundBox.addItem ("Your SoundFont: " + juce::File (soundPath).getFileName(), 3);
+
+    soundBox.addItem ("Choose a SoundFont (.sf2)...", 4);
+    soundBox.setSelectedId (soundChoice == 3 && soundPath.isEmpty() ? 1 : soundChoice, juce::dontSendNotification);
+}
+
+juce::String SettingsPanel::soundSetting() const
+{
+    return soundChoice == 2 ? juce::String ("sketch") : (soundChoice == 3 ? soundPath : juce::String());
 }
 
 juce::String SettingsPanel::articulationOutputFor (int id) const
@@ -264,6 +333,13 @@ void SettingsPanel::resized()
     valuesEditor.setBounds (values);
     exp.removeFromTop (6);
     exportNote.setBounds (exp);
+
+    // Preview sound, above the export section
+    auto snd = r.removeFromBottom (96);
+    soundHeading.setBounds (snd.removeFromTop (26));
+    soundBox.setBounds (snd.removeFromTop (28));
+    snd.removeFromTop (6);
+    soundNote.setBounds (snd);
 
     r.removeFromBottom (8);
     note.setBounds (r);
@@ -466,7 +542,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     loopButton.setClickingTogglesState (true);
     loopButton.setTooltip ("Loop the preview. Cues with loop points play the intro once, then repeat the loop region (green), as a game would.");
     soundButton.setClickingTogglesState (true);
-    soundButton.setTooltip ("Preview sound (a simple sketch synth, heard only inside PromptMIDI)");
+    soundButton.setTooltip ("Preview sound, heard only inside PromptMIDI");
     hostMidiToggle.setTooltip ("Off (default): PromptMIDI stays silent while your DAW plays. On: it sends the piece as MIDI out in time "
                                "with the host transport, to drive instruments on other tracks (never audio).");
 
@@ -657,7 +733,7 @@ void PromptMidiEditor::resized()
     statusLabel.setBounds (line1.removeFromRight (line1.getWidth() / 2));
     titleLabel.setBounds (line1);
     auto line2 = r.removeFromTop (20);
-    qualityLabel.setBounds (line2.removeFromRight (juce::jmin (420, line2.getWidth() / 2)));
+    qualityLabel.setBounds (line2.removeFromRight (juce::jmin (520, line2.getWidth() / 2)));
     summaryLabel.setBounds (line2);
     interpretationLabel.setBounds (r.removeFromTop (18));
     r.removeFromTop (10);
@@ -790,16 +866,35 @@ void PromptMidiEditor::refreshFromProcessor()
     setStatusText (processor.getStatusMessage(), status == PromptMidiProcessor::Status::Error ? Theme::error
                                                : status == PromptMidiProcessor::Status::Working ? Theme::accentHot : Theme::textDim);
 
-    // Every generation is checked; show the verdict, with the details and the form on hover.
+    // Every generation is checked against the request and for quality; show the verdict, with
+    // each criterion, the details and the form on hover.
     if (has && comp.quality.score > 0.0)
     {
+        const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
+        const auto& request = comp.request;
         juce::String q;
+
+        if (request.total() > 0)
+            q << (request.allMet() ? juce::String ("Matches your request") : juce::String ("Request"))
+              << " " << request.met() << "/" << request.total() << dot;
+
         q << "Quality " << juce::String (comp.quality.score, 1) << " / 10";
 
         if (comp.quality.candidates > 1)
-            q << juce::String::fromUTF8 ("  \xc2\xb7  ") << "best of " << comp.quality.candidates << " drafts";
+            q << dot << "best of " << comp.quality.candidates << " drafts";
 
         juce::StringArray details;
+
+        if (request.total() > 0)
+        {
+            details.add ("What you asked for:");
+
+            for (auto& c : request.criteria)
+                details.add (juce::String::fromUTF8 (c.met ? "  \xe2\x9c\x93  " : "  \xe2\x9c\x97  ") + fromStd (c.label)
+                             + (c.met ? juce::String() : " (" + fromStd (c.detail) + ")"));
+
+            details.add ({});
+        }
 
         if (! comp.form.empty())
             details.add ("Form: " + fromStd (comp.form));
@@ -812,7 +907,8 @@ void PromptMidiEditor::refreshFromProcessor()
             details.add (fromStd (line));
 
         qualityLabel.setText (q, juce::dontSendNotification);
-        qualityLabel.setColour (juce::Label::textColourId, comp.quality.score >= 8.5 ? Theme::ok
+        qualityLabel.setColour (juce::Label::textColourId, ! request.allMet() ? Theme::playhead
+                                                         : comp.quality.score >= 8.5 ? Theme::ok
                                                          : comp.quality.score >= 7.0 ? Theme::playhead : Theme::error);
         qualityLabel.setTooltip (details.joinIntoString ("\n"));
     }
@@ -860,6 +956,12 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
+    if (const auto sound = processor.getPreviewSoundDescription(); sound != shownSound)
+    {
+        shownSound = sound;
+        soundButton.setTooltip ("Preview sound: " + sound + ". Heard only inside PromptMIDI; change it in Settings.");
+    }
+
     const bool playing = processor.isPreviewPlaying();
     const double head = processor.getPlayheadTick();
     arrangement.setPlayhead (head);
@@ -952,9 +1054,16 @@ void PromptMidiEditor::pullControls()
 void PromptMidiEditor::showSettings()
 {
     juce::Component::SafePointer<PromptMidiEditor> safe (this);
-    auto panel = std::make_unique<SettingsPanel> (*processor.settings, [safe]
+    const bool hadKey = processor.settings->hasApiKey();
+    auto panel = std::make_unique<SettingsPanel> (*processor.settings, [safe, hadKey]
     {
-        if (safe != nullptr && safe->processor.settings->hasApiKey())
+        if (safe == nullptr)
+            return;
+
+        safe->processor.previewSoundChanged();
+
+        // A key just added means you want Claude; saving other settings leaves the engine alone.
+        if (! hadKey && safe->processor.settings->hasApiKey())
         {
             safe->processor.engine = PromptMidiProcessor::Engine::Claude;
             safe->updateEngineButtons();

@@ -3,6 +3,7 @@
 #include "Composer.h"
 #include "MidiFileWriter.h"
 #include "QualityCheck.h"
+#include "RequestCheck.h"
 #include "SpecJson.h"
 
 namespace
@@ -35,7 +36,8 @@ PromptMidiProcessor::PromptMidiProcessor()
     generatedMidi.ensureSize (8192);
     panicMidi.ensureSize (4096);
     statusMessage = "Describe the music you want, then press Generate.";
-    startTimer (500);
+    synth.setSource (settings->getPreviewSound());   // the instruments load in the background
+    startTimer (250);
 }
 
 PromptMidiProcessor::~PromptMidiProcessor()
@@ -131,6 +133,7 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     juce::ScopedNoDenormals noDenormals;
     lastBlockMs.store (juce::Time::getMillisecondCounter());
     bypassedByHost.store (false);
+    synth.beginBlock();
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
     generatedMidi.clear();
@@ -569,6 +572,11 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
 
             auto s = baseSpec;
             applyControls (s, true);
+
+            // Claude's plan is held to the same request as the offline one: what the prompt and
+            // the controls ask for (instruments, key, tempo, length...) is enforced, then checked.
+            s.request = pm::parseRequest (requestPrompt.toStdString(), promptOverrides());
+            pm::applyRequest (s, s.request);
             mutedMask.store (0);
             applySpec (s, newSeed);
             setStatus (Status::Idle, "Composed with Claude. Press Variation for another take with the same plan.");
@@ -622,6 +630,9 @@ void PromptMidiProcessor::controlsChanged()
     // Claude's harmony was written for its scale, so a new scale needs a new plan.
     auto s = baseSpec;
     applyControls (s, false);
+    auto request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
+    request.mode = -1;   // (the plan keeps Claude's scale until Generate asks for a new plan; the check still reports it)
+    pm::applyRequest (s, request);
     applySpec (s, seed);
 
     const bool modeDiffers = controls.mode >= 0 && (pm::Mode) controls.mode != baseSpec.mode;
@@ -650,6 +661,11 @@ void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newS
 
     spec = newSpec;
     seed = newSeed;
+
+    // Every take is checked against what the prompt and the controls ask for.
+    if (lastPrompt.isNotEmpty())
+        spec.request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
+
     composition = pm::compose (spec, seed);
     ++pieceVersion;
     undoManager.clearUndoHistory();
@@ -853,8 +869,16 @@ void PromptMidiProcessor::publishPlayback()
     sendChangeMessage();
 }
 
+void PromptMidiProcessor::previewSoundChanged()
+{
+    synth.setSource (settings->getPreviewSound());
+    sendChangeMessage();
+}
+
 void PromptMidiProcessor::timerCallback()
 {
+    synth.refresh();   // a newly loaded SoundFont, or one chosen in another instance's settings
+
     // Free playback data the audio thread no longer references.
     retired.erase (std::remove_if (retired.begin(), retired.end(),
                                    [] (const std::shared_ptr<const PlaybackData>& p) { return p.use_count() == 1; }),

@@ -109,6 +109,7 @@ struct Composition
     int loopEnd = -1;
     std::string form;                     // e.g. "Intro - Theme - Development - Climax - Outro"
     QualityReport quality;
+    RequestReport request;                // the prompt's criteria, met or not (see Request.h)
 
     double seconds() const { return tempo > 0 ? (double) lengthTicks / kPpq * 60.0 / tempo : 0.0; }
 

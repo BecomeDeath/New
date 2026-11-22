@@ -264,6 +264,54 @@ int main()
         processor.releaseResources();
     }
 
+    std::printf ("the preview plays real instruments\n");
+    {
+        auto& engine = processor.getPreviewEngine();
+        engine.setSource ("");
+        CHECK (engine.getBank().waitUntilLoaded (20000));
+        engine.refresh();
+        CHECK (engine.getDescription() == "GeneralUser GS");
+
+        Head head;
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 512);
+        processor.setPreviewPlaying (true, 0.0);
+        int ons = 0;
+        const float peak = render (processor, 120, ons);
+        CHECK (processor.isPreviewSampled());
+        CHECK (peak > 0.01f && peak < 1.0f);
+        CHECK (ons == 0);                          // still nothing leaves as MIDI
+
+        // ...and still stops when the host plays.
+        head.playing = true;
+        render (processor, 4, ons);
+        render (processor, 200, ons);              // let the release and the reverb ring out
+        CHECK (render (processor, 20, ons) < 1.0e-4f);
+
+        // The sketch synth on request.
+        head.playing = false;
+        engine.setSource ("sketch");
+        CHECK (engine.getBank().waitUntilLoaded (5000));
+        engine.refresh();
+        processor.setPreviewPlaying (true, 0.0);
+        CHECK (render (processor, 60, ons) > 0.001f);
+        CHECK (! processor.isPreviewSampled());
+
+        // A missing SoundFont falls back to the sketch synth and says so.
+        engine.setSource ("/nonexistent/folder/none.sf2");
+        CHECK (engine.getBank().waitUntilLoaded (5000));
+        engine.refresh();
+        CHECK (engine.getDescription().startsWith ("Sketch synth"));
+        CHECK (render (processor, 60, ons) > 0.001f);
+
+        engine.setSource ("");
+        engine.getBank().waitUntilLoaded (20000);
+        engine.refresh();
+        processor.setPreviewPlaying (false);
+        processor.setPlayHead (nullptr);
+        processor.releaseResources();
+    }
+
     std::printf ("play cursor\n");
     {
         processor.setCursorTick (-100.0);

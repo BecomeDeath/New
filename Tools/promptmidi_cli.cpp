@@ -179,7 +179,15 @@ int main (int argc, char** argv)
         std::cout << "Form:    " << comp.form << "\n";
 
     std::printf ("Length:  %d bars, %d:%02d\n", comp.bars, (int) comp.seconds() / 60, (int) comp.seconds() % 60);
-    std::printf ("Quality: %.1f / 10 (best of %d takes)\n", comp.quality.score, comp.quality.candidates);
+    std::printf ("Quality: %.1f / 10 (best of %d drafts)\n", comp.quality.score, comp.quality.candidates);
+
+    if (comp.request.total() > 0)
+    {
+        std::printf ("Request: %d of %d criteria met\n", comp.request.met(), comp.request.total());
+
+        for (auto& c : comp.request.criteria)
+            std::cout << "  " << (c.met ? "[x] " : "[ ] ") << c.label << (c.met ? std::string() : " - " + c.detail) << "\n";
+    }
 
     for (auto& q : comp.quality.notesText)
         std::cout << "  - " << q << "\n";

@@ -353,6 +353,19 @@ juce::var compositionToVar (const pm::Composition& c)
     put (q, "notes", stringArray (c.quality.notesText));
     put (o, "quality", q);
 
+    juce::Array<juce::var> criteria;
+
+    for (auto& cr : c.request.criteria)
+    {
+        juce::var item = makeObject();
+        put (item, "label", juce::String::fromUTF8 (cr.label.c_str()));
+        put (item, "met", cr.met);
+        put (item, "detail", juce::String::fromUTF8 (cr.detail.c_str()));
+        criteria.add (item);
+    }
+
+    put (o, "request", criteria);
+
     juce::Array<juce::var> tracks;
 
     for (auto& t : c.tracks)
@@ -472,6 +485,11 @@ bool compositionFromVar (const juce::var& o, pm::Composition& c)
             for (auto& n : *notes)
                 c.quality.notesText.push_back (toStd (n.toString()));
     }
+
+    if (auto* criteria = o["request"].getArray())
+        for (auto& cr : *criteria)
+            if (cr.isObject())
+                c.request.criteria.push_back ({ toStd (getString (cr, "label", "")), (bool) cr["met"], toStd (getString (cr, "detail", "")) });
 
     if (auto* tracks = o["tracks"].getArray())
     {
