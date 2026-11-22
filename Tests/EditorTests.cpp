@@ -3,6 +3,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "InstrumentPicker.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Timeline.h"
@@ -86,8 +87,10 @@ int main()
 
         CHECK (processor.getUndoManager().undo());
         CHECK (processor.getComposition().tracks[(size_t) track].notes.size() == before.size());
+        CHECK (! processor.isEdited());          // undoing every edit gives back the piece as composed
         CHECK (processor.getUndoManager().redo());
         CHECK (processor.getComposition().tracks[(size_t) track].notes.size() == before.size() + 1);
+        CHECK (processor.isEdited());
 
         // Invalid edits are made valid.
         auto bad = before;
@@ -122,6 +125,93 @@ int main()
             different = different || after.tracks[t].notes.size() != before.tracks[t].notes.size();
 
         CHECK (different);
+    }
+
+    std::printf ("takes: nothing is lost by trying another\n");
+    {
+        PromptMidiProcessor p;
+        p.seedLocked = true;
+        p.seed = 5;
+        p.generate ("Make me a soft piano midi");
+        CHECK (p.getNumTakes() == 1 && p.getCurrentTake() == 0);
+
+        auto addNote = [&p]
+        {
+            auto notes = p.getComposition().tracks[0].notes;
+            pm::Note n;
+            n.start = 960;
+            n.length = 240;
+            n.pitch = 101;
+            n.velocity = 99;
+            notes.push_back (n);
+            p.editTrackNotes (0, notes, "Add note");
+        };
+
+        addNote();
+        p.setTrackMuted (1, true);
+        const auto editedCount = p.getComposition().tracks[0].notes.size();
+        const auto firstTitle = p.getComposition().title;
+
+        p.makeVariation();
+        CHECK (p.getNumTakes() == 2 && p.getCurrentTake() == 1);
+        CHECK (! p.isEdited());
+
+        const int piece = p.getPieceVersion();
+        p.selectTake (0);
+        CHECK (p.getCurrentTake() == 0);
+        CHECK (p.isEdited());
+        CHECK (p.getComposition().tracks[0].notes.size() == editedCount);
+        CHECK (p.getComposition().title == firstTitle);
+        CHECK (p.isTrackMuted (1));
+        CHECK (p.getPieceVersion() != piece);     // the view refits
+        CHECK (! p.getUndoManager().canUndo());
+        CHECK (p.getTakeTitle (0).endsWith ("(edited)"));
+
+        p.selectTake (1);
+        CHECK (! p.isEdited());
+        p.selectTake (7);                          // out of range: ignored
+        CHECK (p.getCurrentTake() == 1);
+
+        // New settings re-compose the take on screen...
+        p.controls.tempo = 90;
+        p.controlsChanged();
+        CHECK (p.getNumTakes() == 2 && p.getComposition().tempo == 90);
+
+        // ...but an edited take is kept as it was.
+        addNote();
+        p.controls.tempo = 100;
+        p.controlsChanged();
+        CHECK (p.getNumTakes() == 3 && p.getCurrentTake() == 2);
+        p.selectTake (1);
+        CHECK (p.isEdited() && p.getComposition().tempo == 90);
+
+        // Generate starts a new take too; the history is bounded.
+        p.generate ("Lo-fi hip hop beat");
+        CHECK (p.getNumTakes() == 4 && p.getCurrentTake() == 3);
+
+        for (int i = 0; i < 30; ++i)
+            p.makeVariation();
+
+        CHECK (p.getNumTakes() == PromptMidiProcessor::maxTakes);
+        CHECK (p.getCurrentTake() == PromptMidiProcessor::maxTakes - 1);
+
+        // A project restore starts a fresh history with the restored piece.
+        juce::MemoryBlock state;
+        p.getStateInformation (state);
+        PromptMidiProcessor q;
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        CHECK (q.getNumTakes() == 1 && q.hasComposition());
+    }
+
+    std::printf ("instrument summary\n");
+    {
+        InstrumentPicker::Choices c;
+        CHECK (InstrumentPicker::summary (c) == "Auto");
+        pm::InstrumentChoice a, b;
+        a.name = "Flutes";
+        b.name = "Harp";
+        c = { a, b };
+        CHECK (InstrumentPicker::summary (c) == "Flutes, Harp");
     }
 
     std::printf ("your own instruments\n");
@@ -203,6 +293,32 @@ int main()
             arrangement->setPlayhead (5000.0);
             arrangement->selectTrack (999);
             CHECK (arrangement->getSelectedTrack() == -1);
+
+            // Opening the editor on a whole-piece view zooms in far enough to edit notes.
+            arrangement->fit();
+            const int tpb = processor.getComposition().ticksPerBar;
+            CHECK (arrangement->getAxis().pixelsPerTick * tpb < 40.0);
+            arrangement->selectTrack (2);
+            CHECK (arrangement->getAxis().pixelsPerTick * tpb >= 40.0);
+
+            // Esc closes it (with nothing selected).
+            for (auto* child : arrangement->getChildren())
+                if (child->isVisible() && child->getWantsKeyboardFocus())
+                    child->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+
+            CHECK (arrangement->getSelectedTrack() == -1);
+
+            // Ctrl / Cmd + Z undoes a note edit from anywhere in the window, Shift redoes it.
+            const auto before = processor.getComposition().tracks[0].notes.size();
+            auto notes = processor.getComposition().tracks[0].notes;
+            notes.pop_back();
+            processor.editTrackNotes (0, notes, "Delete note");
+            CHECK (processor.getComposition().tracks[0].notes.size() == before - 1);
+            editor->keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 'z'));
+            CHECK (processor.getComposition().tracks[0].notes.size() == before);
+            editor->keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 'Z'));
+            CHECK (processor.getComposition().tracks[0].notes.size() == before - 1);
+            processor.dispatchPendingMessages();
 
             const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
             CHECK (image.getWidth() == 1240);

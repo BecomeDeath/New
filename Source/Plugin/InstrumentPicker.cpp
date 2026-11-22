@@ -115,9 +115,20 @@ private:
 };
 
 //==============================================================================
-InstrumentPicker::InstrumentPicker (const Choices& current, std::function<void (const Choices&)> apply)
-    : choices (current), custom (! current.empty()), onApply (std::move (apply))
+InstrumentPicker::InstrumentPicker (const Choices& current, const Choices& piece, std::function<void (const Choices&)> apply)
+    : choices (current), ensemble (piece), custom (! current.empty()), onApply (std::move (apply))
 {
+    if ((int) ensemble.size() > maxInstruments)
+        ensemble.resize ((size_t) maxInstruments);
+
+    customiseButton.setTooltip ("Start your own list from the instruments this piece uses, then add, remove or change roles");
+    customiseButton.onClick = [this]
+    {
+        choices = ensemble;
+        setCustom (true);
+    };
+    addChildComponent (customiseButton);
+
     for (auto* b : { &autoButton, &customButton })
     {
         b->setClickingTogglesState (true);
@@ -160,10 +171,12 @@ juce::String InstrumentPicker::summary (const Choices& c)
     if (c.empty())
         return "Auto";
 
-    if (c.size() == 1)
-        return fromStd (c.front().name);
+    juce::StringArray names;
 
-    return fromStd (c.front().name) + " + " + juce::String ((int) c.size() - 1);
+    for (auto& x : c)
+        names.add (fromStd (x.name));
+
+    return names.joinIntoString (", ");
 }
 
 void InstrumentPicker::setCustom (bool shouldBeCustom)
@@ -174,6 +187,8 @@ void InstrumentPicker::setCustom (bool shouldBeCustom)
 
     for (auto* c : std::initializer_list<juce::Component*> { &addButton, &presetsButton, &clearButton, &viewport })
         c->setEnabled (custom);
+
+    customiseButton.setVisible (! custom && ! ensemble.empty());
 
     rebuild();
 }
@@ -192,7 +207,7 @@ void InstrumentPicker::rebuild()
 
 void InstrumentPicker::addInstrument (const pm::CatalogueEntry& e)
 {
-    if (choices.size() >= 16)
+    if ((int) choices.size() >= maxInstruments)
         return;
 
     choices.push_back (choiceFor (e));
@@ -221,7 +236,12 @@ void InstrumentPicker::showAddMenu()
     }
 
     for (auto& name : order)
+    {
+        categories[name].setLookAndFeel (&getLookAndFeel());
         menu.addSubMenu (fromStd (name), categories[name]);
+    }
+
+    menu.setLookAndFeel (&getLookAndFeel());
 
     juce::Component::SafePointer<InstrumentPicker> safe (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addButton), [safe] (int result)
@@ -234,6 +254,8 @@ void InstrumentPicker::showAddMenu()
 void InstrumentPicker::showPresets()
 {
     juce::PopupMenu menu;
+
+    menu.setLookAndFeel (&getLookAndFeel());
 
     for (int i = 0; i < (int) presets().size(); ++i)
         menu.addItem (i + 1, presets()[(size_t) i].name);
@@ -267,17 +289,37 @@ void InstrumentPicker::paint (juce::Graphics& g)
     g.setFont (Theme::font (16.0f, Theme::Weight::SemiBold));
     g.drawText ("Instruments", r.removeFromTop (24), juce::Justification::centredLeft);
 
-    if (! custom || choices.empty())
+    if (custom && choices.empty())
     {
-        auto body = viewport.getBounds();
         g.setColour (Theme::textDim);
         g.setFont (Theme::font (13.0f));
-        g.drawFittedText (custom ? juce::String ("Add instruments, or start from a preset. One instrument gives a solo piece "
-                                                 "(a piano, harp or guitar plays melody and accompaniment); three or more in an "
-                                                 "orchestral style give a full cue.")
-                                 : juce::String ("PromptMIDI chooses the instruments from your prompt and its style - a full orchestra "
-                                                 "for orchestral music, a band for rock, and so on. Pick \"My instruments\" to choose them yourself."),
-                          body.reduced (6), juce::Justification::topLeft, 6);
+        g.drawFittedText ("Add instruments, or start from a preset. One instrument gives a solo piece "
+                          "(a piano, harp or guitar plays melody and accompaniment); three or more in an "
+                          "orchestral style give a full cue.",
+                          viewport.getBounds().reduced (6), juce::Justification::topLeft, 6);
+    }
+    else if (! custom)
+    {
+        auto body = viewport.getBounds().reduced (6, 0);
+        g.setColour (Theme::textDim);
+        g.setFont (Theme::font (13.0f));
+        g.drawFittedText ("PromptMIDI chooses the instruments from your prompt and its style - a full orchestra "
+                          "for orchestral music, a band for rock, and so on.",
+                          body.removeFromTop (40), juce::Justification::topLeft, 3);
+
+        if (! ensemble.empty())
+        {
+            body.removeFromTop (8);
+            g.setColour (Theme::textMid);
+            g.setFont (Theme::font (12.5f, Theme::Weight::SemiBold));
+            g.drawText ("This piece uses " + juce::String ((int) ensemble.size()) + (ensemble.size() == 1 ? " instrument" : " instruments"),
+                        body.removeFromTop (20), juce::Justification::centredLeft);
+            body.removeFromBottom (customiseButton.getHeight() + 10);
+            g.setColour (Theme::text);
+            g.setFont (Theme::font (13.0f));
+            g.drawFittedText (summary (ensemble), body.removeFromTop (juce::jmin (body.getHeight(), 120)),
+                              juce::Justification::topLeft, 7);
+        }
     }
 }
 
@@ -303,6 +345,7 @@ void InstrumentPicker::resized()
     r.removeFromTop (10);
 
     viewport.setBounds (r);
+    customiseButton.setBounds (r.removeFromBottom (30).removeFromLeft (150).translated (6, 0));
     const int rowH = 46;
     const int w = viewport.getMaximumVisibleWidth();
     list.setSize (w, rowH * rows.size());

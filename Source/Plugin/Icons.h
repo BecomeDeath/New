@@ -6,7 +6,7 @@
 namespace Icons
 {
     enum class Kind { Play, Stop, Loop, Speaker, Gear, Download, Plus, Cross, Lock, Sparkle, Shuffle, ZoomIn, ZoomOut,
-                      Fit, Follow, MidiOut, Instruments, Undo, Redo, Edit, Export };
+                      Fit, Follow, MidiOut, Instruments, Undo, Redo, Edit, Export, ChevronLeft, ChevronRight };
 
     inline void addLine (juce::Path& p, float x0, float y0, float x1, float y1)
     {
@@ -114,6 +114,8 @@ namespace Icons
                     p.applyTransform (juce::AffineTransform::scale (-1.0f, 1.0f, 12.0f, 12.0f));
                 break;
             }
+            case Kind::ChevronLeft:  p.startNewSubPath (14.5f, 6.5f); p.lineTo (9.0f, 12.0f); p.lineTo (14.5f, 17.5f); break;
+            case Kind::ChevronRight: p.startNewSubPath (9.5f, 6.5f); p.lineTo (15.0f, 12.0f); p.lineTo (9.5f, 17.5f); break;
             case Kind::Edit:
                 p.startNewSubPath (5.0f, 19.0f); p.lineTo (6.0f, 15.0f); p.lineTo (16.0f, 5.0f); p.lineTo (19.0f, 8.0f);
                 p.lineTo (9.0f, 18.0f); p.closeSubPath();
@@ -184,7 +186,7 @@ public:
             return;
         }
 
-        const auto f = Theme::font (juce::jmin (14.0f, r.getHeight() * 0.4f), Theme::Weight::Medium);
+        const auto f = Theme::font (juce::jlimit (12.5f, 14.0f, r.getHeight() * 0.4f), Theme::Weight::Medium);
         const float textW = juce::GlyphArrangement::getStringWidth (f, label);
         const float total = iconSize + 7.0f + textW;
         auto row = content.withSizeKeepingCentre (juce::jmin (total, content.getWidth()), r.getHeight());

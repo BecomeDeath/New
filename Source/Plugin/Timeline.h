@@ -40,8 +40,10 @@ protected:
     selected track.
 
     Mouse: click the ruler to move the play cursor; wheel scrolls (Shift = sideways),
-    Ctrl / Cmd + wheel zooms; click a lane or header to edit that track; drag a header out to the
-    DAW to get that track alone.
+    Ctrl / Cmd + wheel zooms; click a lane or header to edit that track (the view zooms in to
+    its notes if they're too small to edit); drag a header out to the DAW to get that track alone.
+    Keys in the note editor: arrows move / transpose, Delete removes, Ctrl / Cmd + A selects all,
+    Esc clears the selection, then closes the editor.
 */
 class Arrangement : public juce::Component, private juce::ScrollBar::Listener
 {
@@ -58,6 +60,7 @@ public:
     void fit();
     void selectTrack (int index);
     int getSelectedTrack() const { return selected; }
+    const TimeAxis& getAxis() const { return axis; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -78,6 +81,7 @@ private:
     void updateScrollBars();
     void axisChanged();
     void layoutRows();
+    void revealTrack (int index);
     juce::Rectangle<int> lanesArea() const;
     const pm::Composition& comp() const;
 

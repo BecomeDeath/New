@@ -2941,6 +2941,17 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                 doubleOn (E.primary, 1);
             else if (E.primary != lead)
                 doubleOn (E.primary, pi == Inst::Horn || pi == Inst::Vc || pi == Inst::Trombone ? -1 : 0);
+
+            // The tutti theme: the woodwinds take the tune too - flutes an octave up, oboes or
+            // clarinets with it - so the full statement has its upper colour, not strings alone.
+            if (i >= 0.45)
+            {
+                doubleOn (free (Inst::Flute), 1);
+                doubleOn (free (Inst::Oboe), ((seed >> 7) ^ si) & 1 ? 1 : 0);
+
+                if (! F.lyrical && ! F.pastoral)
+                    doubleOn (free (Inst::Clarinet), 0);
+            }
         }
 
         if (sec.kind == Kind::Climax || sec.kind == Kind::Stinger)
@@ -2976,10 +2987,17 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
         // 2. Counter-line / imitation.
         if ((sec.kind == Kind::Development || sec.kind == Kind::Build) && ! L.imitation.empty())
         {
-            int answer = free (Inst::Vc);
+            // The answer moves around the orchestra from cue to cue; a woodwind voice is a natural choice.
+            int answer = -1;
 
-            if (answer < 0) answer = free (Inst::Horn);
-            if (answer < 0) answer = free (Inst::Vla);
+            for (Inst pref : (((seed >> 9) ^ si) & 1 ? std::vector<Inst> { Inst::Vc, Inst::Clarinet, Inst::Horn, Inst::Vla, Inst::Oboe }
+                                                 : std::vector<Inst> { Inst::Clarinet, Inst::Oboe, Inst::Vc, Inst::Horn, Inst::Vla }))
+            {
+                answer = free (pref);
+
+                if (answer >= 0)
+                    break;
+            }
 
             if (answer >= 0)
             {
@@ -3206,7 +3224,11 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                     winds.push_back (t);
             }
 
-            const bool windChoir = (F.pastoral || F.lyrical || sec.kind == Kind::Climax) && i >= 0.3 && sec.kind != Kind::Intro;
+            // Woodwind chords: in gentle cues throughout; in driving ones from the development on,
+            // and in the tutti theme, so the winds aren't silent until the climax.
+            const bool windChoir = ((F.pastoral || F.lyrical || sec.kind == Kind::Climax || sec.kind == Kind::Build
+                                     || sec.kind == Kind::Restatement || (sec.kind == Kind::Development && i >= 0.45))
+                                    && i >= 0.3 && sec.kind != Kind::Intro);
 
             if (! winds.empty() && windChoir)
             {

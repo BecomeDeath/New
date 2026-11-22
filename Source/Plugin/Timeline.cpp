@@ -163,11 +163,13 @@ public:
             g.setColour (Theme::accent.withAlpha (i % 2 == 0 ? 0.22f : 0.14f));
             g.fillRoundedRectangle (band, 3.0f);
 
-            if (band.getWidth() > 30.0f)
+            // The name stays visible when the section starts off-screen, but never runs into the next one.
+            auto textArea = band.reduced (6.0f, 0.0f);
+            textArea.setLeft (juce::jmax (textArea.getX(), 4.0f));
+
+            if (textArea.getWidth() > 24.0f)
             {
                 g.setColour (Theme::text.withAlpha (0.9f));
-                auto textArea = band.reduced (6.0f, 0.0f);
-                textArea.setX (juce::jmax (textArea.getX(), 4.0f)); // keep the name visible when scrolled
                 g.drawText (fromStd (marks[i]->text), textArea, juce::Justification::centredLeft, true);
             }
         }
@@ -397,7 +399,36 @@ public:
     void refresh()
     {
         mute.setToggleState (processor.isTrackMuted (track), juce::dontSendNotification);
+        subtitle = {};
+        const auto& c = arr.comp();
+
+        if (track >= 0 && track < (int) c.tracks.size())
+        {
+            // The sound it asks for and the range it plays (roles change from section to section in a cue).
+            const auto& t = c.tracks[(size_t) track];
+            subtitle = t.isDrum ? juce::String ("Percussion") : juce::String (pm::gmProgramName (t.program));
+            int lo = 128, hi = -1;
+
+            for (auto& n : t.notes)
+            {
+                lo = juce::jmin (lo, n.pitch);
+                hi = juce::jmax (hi, n.pitch);
+            }
+
+            if (! t.isDrum && hi >= lo)
+                subtitle << juce::String::fromUTF8 ("  \xc2\xb7  ") << pitchName (lo) << juce::String::fromUTF8 ("\xe2\x80\x93") << pitchName (hi);
+
+            setTooltip (fromStd (t.name) + " - " + juce::String ((int) t.notes.size()) + " notes. "
+                        "Click to edit its notes; drag into your DAW to get just this track.");
+        }
+
         repaint();
+    }
+
+    static juce::String pitchName (int p)
+    {
+        static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        return juce::String (names[p % 12]) + juce::String (p / 12 - 1);
     }
 
     void paint (juce::Graphics& g) override
@@ -429,10 +460,9 @@ public:
         g.setFont (Theme::font (13.0f, Theme::Weight::Medium));
         g.drawText (fromStd (t.name), r.removeFromTop (r.getHeight() / 2 + 1), juce::Justification::bottomLeft, true);
 
-        const juce::String instrument = t.isDrum ? juce::String ("Percussion") : juce::String (pm::gmProgramName (t.program));
         g.setColour (Theme::textDim);
         g.setFont (Theme::font (11.0f));
-        g.drawText (instrument + juce::String::fromUTF8 ("  \xc2\xb7  ") + pm::roleDisplayName (t.role), r, juce::Justification::topLeft, true);
+        g.drawText (subtitle, r, juce::Justification::topLeft, true);
     }
 
     void resized() override { mute.setBounds (getWidth() - 32, (getHeight() - 20) / 2, 24, 20); }
@@ -465,6 +495,7 @@ private:
 
     Arrangement& arr;
     MuteButton mute;
+    juce::String subtitle;
 };
 
 //==============================================================================
@@ -853,22 +884,27 @@ public:
 
     bool keyPressed (const juce::KeyPress& key) override
     {
-        auto& um = arr.processor.getUndoManager();
         const auto mods = key.getModifiers();
+        const auto code = key.getKeyCode() < 256 ? juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key.getKeyCode()) : 0;
 
-        if (key.getKeyCode() == 'Z' && mods.isCommandDown())
+        // Ctrl / Cmd + Z, Shift + Z and Y are handled by the window, so they work wherever the focus is.
+
+        if (key == juce::KeyPress::escapeKey)
         {
-            if (mods.isShiftDown()) um.redo(); else um.undo();
+            if (! selection.empty())
+            {
+                selection.clear();
+                repaint();
+            }
+            else
+            {
+                arr.selectTrack (-1);
+            }
+
             return true;
         }
 
-        if (key.getKeyCode() == 'Y' && mods.isCommandDown())
-        {
-            um.redo();
-            return true;
-        }
-
-        if (key.getKeyCode() == 'A' && mods.isCommandDown())
+        if (code == 'A' && mods.isCommandDown())
         {
             selection.clear();
 
@@ -1108,6 +1144,30 @@ void Arrangement::selectTrack (int index)
 {
     selected = (index >= 0 && index < (int) comp().tracks.size()) ? index : -1;
     resized();
+
+    if (selected >= 0)
+    {
+        revealTrack (selected);
+
+        // Notes a pixel wide can't be edited: zoom in to about twelve bars, from the track's first note in view.
+        const int tpb = juce::jmax (1, comp().ticksPerBar);
+
+        if (axis.pixelsPerTick * tpb < 40.0)
+        {
+            const auto& notes = comp().tracks[(size_t) selected].notes;
+            int first = -1;
+
+            for (auto& n : notes)
+                if (n.start + n.length > axis.startTick && (first < 0 || n.start < first))
+                    first = n.start;
+
+            const int w = juce::jmax (1, lanes->getWidth());
+            axis.pixelsPerTick = juce::jlimit (w / (double) juce::jmax (comp().lengthTicks, tpb), 0.6, w / (12.0 * tpb));
+            axis.startTick = first >= 0 ? (double) ((juce::jmax (0, first) / tpb) * tpb) : axis.startTick;
+            axisChanged();
+        }
+    }
+
     editor->setTrack (selected);
     editor->refresh();
 
@@ -1118,6 +1178,20 @@ void Arrangement::selectTrack (int index)
 
     if (selected >= 0)
         editor->grabKeyboardFocus();
+}
+
+void Arrangement::revealTrack (int index)
+{
+    const int top = index * laneHeight, bottom = top + laneHeight, h = lanes->getHeight();
+
+    if (top < rowOffset)
+        rowOffset = top;
+    else if (bottom > rowOffset + h)
+        rowOffset = bottom - h;
+
+    updateScrollBars();
+    layoutRows();
+    lanes->repaint();
 }
 
 void Arrangement::setPlayhead (double tick)

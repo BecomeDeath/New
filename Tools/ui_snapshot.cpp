@@ -1,6 +1,6 @@
 // Renders the plug-in editor offscreen to a PNG (used to check the UI on headless CI).
 //
-//   promptmidi_ui_snapshot out.png ["prompt"] [scale] [width] [height] [track to edit] [zoom]
+//   promptmidi_ui_snapshot out.png ["prompt"] [scale] [width] [height] [track to edit, -1 = none] [zoom] [variations]
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -21,6 +21,9 @@ int main (int argc, char** argv)
     processor.seed = 7;
     processor.generate (prompt);
 
+    for (int i = 0; i < (argc > 8 ? juce::String (argv[8]).getIntValue() : 0); ++i)
+        processor.makeVariation();   // shows the take history
+
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
     editor->setSize (argc > 4 ? juce::String (argv[4]).getIntValue() : 1240, argc > 5 ? juce::String (argv[5]).getIntValue() : 800);
 
@@ -29,7 +32,7 @@ int main (int argc, char** argv)
 
     if (auto* arrangement = dynamic_cast<Arrangement*> (editor->findChildWithID ("arrangement")))
     {
-        if (argc > 6)
+        if (argc > 6 && juce::String (argv[6]).getIntValue() >= 0)
             arrangement->selectTrack (juce::String (argv[6]).getIntValue());
 
         if (argc > 7)

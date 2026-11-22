@@ -112,11 +112,27 @@ public:
     /** Replaces one track's notes (from the note editor), as an undoable step. */
     void editTrackNotes (int trackIndex, std::vector<pm::Note> notes, const juce::String& actionName);
     juce::UndoManager& getUndoManager()                      { return undoManager; }
-    bool isEdited() const                                    { return edited; }
+    /** True when the notes differ from what was composed: edits still in the undo history, or
+        made before it (a take you went back to, a restored project). Undoing every edit clears it. */
+    bool isEdited() const                                    { return edited || undoManager.canUndo(); }
+
+    /** Every Generate and Variation is a new take; earlier takes (with their edits) stay one click
+        away, so nothing is lost by trying another. Kept for this session only: the project saves
+        the take on screen. */
+    int getNumTakes() const                                  { return (int) takes.size(); }
+    int getCurrentTake() const                               { return currentTake; }
+    void selectTake (int index);
+    juce::String getTakeTitle (int index) const;
+    static constexpr int maxTakes = 20;
 
     /** Plays one note through the preview sound (clicking a note in the editor). Never during host playback. */
     void auditionNote (int trackIndex, int pitch, int velocity);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
+
+    /** For the editor's hints: how long since the host or audio device last asked for audio
+        (a preview can't play without it), and whether that was while bypassed. */
+    juce::uint32 getMsSinceLastAudio() const                 { return juce::Time::getMillisecondCounter() - lastBlockMs.load(); }
+    bool isBypassedByHost() const                            { return bypassedByHost.load(); }
     double getPlayheadTick() const                           { return playheadTick.load(); }
 
     juce::AudioProcessorValueTreeState parameters;
@@ -142,7 +158,25 @@ private:
         int loopEnd = 0;
     };
 
+    /** Composes `newSpec` into the take on screen (call startNewTake() first for a new one). */
     void applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed);
+    void startNewTake (const juce::String& kind);   // keeps the take on screen and opens a new one; call before changing the state
+
+    struct Take
+    {
+        pm::StyleSpec spec, baseSpec;
+        pm::Composition composition;
+        juce::String prompt;
+        Engine engine = Engine::Offline;
+        uint64_t seed = 1, interpretSeed = 1, variationSeed = 0, muted = 0;
+        bool edited = false;
+        juce::String kind;        // "Generated", "Variation", "New settings"
+    };
+
+    void storeTake();             // the state on screen -> takes[currentTake]
+    void resetTakes();            // one take: the state on screen
+    std::vector<Take> takes;
+    int currentTake = -1;
     void setTrackNotes (int trackIndex, const std::vector<pm::Note>& notes);
     friend struct NoteEditAction;
     void publishPlayback();
@@ -187,8 +221,10 @@ private:
     int auditionSamplesLeft = 0, auditionChannel = -1, auditionPitch = -1;
     double cursorTick = 0.0;
     juce::UndoManager undoManager;
-    bool edited = false;
+    bool edited = false;          // edits from before the current undo history
     std::atomic<double> playheadTick { -1.0 };
+    std::atomic<juce::uint32> lastBlockMs { 0 };
+    std::atomic<bool> bypassedByHost { false };
 
     // Audio thread only
     double currentSampleRate = 44100.0;

@@ -62,6 +62,10 @@ private:
     void showSettings();
     void showInstruments();
     void exportMidi();
+    void togglePreview();
+    void showTakeMenu();
+    void updateTakes();
+    juce::String instrumentsText() const;
     void updateEngineButtons();
     void pushControls();
     void pullControls();
@@ -91,6 +95,8 @@ private:
 
     // Result
     juce::Label titleLabel, summaryLabel, interpretationLabel, statusLabel, qualityLabel;
+    IconButton prevTakeButton { "previous take", Icons::Kind::ChevronLeft }, nextTakeButton { "next take", Icons::Kind::ChevronRight };
+    juce::TextButton takeButton;
     Arrangement arrangement;
 
     // Transport
@@ -112,6 +118,8 @@ private:
     std::unique_ptr<SliderAttachment> volumeAttachment;
 
     int animationFrame = 0;
+    juce::uint32 previewStartedAt = 0;
+    bool audioHintShown = false;
     int shownVersion = -1, shownPiece = -1;
     bool updatingControls = false;
 

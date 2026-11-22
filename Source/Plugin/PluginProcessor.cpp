@@ -129,6 +129,8 @@ void PromptMidiProcessor::emitRange (const PlaybackData& data, double fromTick, 
 void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    lastBlockMs.store (juce::Time::getMillisecondCounter());
+    bypassedByHost.store (false);
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
     generatedMidi.clear();
@@ -382,6 +384,8 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 void PromptMidiProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     // Bypassed: silence, end every note this plug-in started, and stop the preview.
+    lastBlockMs.store (juce::Time::getMillisecondCounter());
+    bypassedByHost.store (true);
     buffer.clear();
     panicMidi.clear();
     previewPlaying.store (false);
@@ -514,6 +518,7 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
 
     if (engine == Engine::Offline)
     {
+        startNewTake ("Generated");
         lastPrompt = prompt;
         lastEngine = Engine::Offline;
         variationSeed = 0;
@@ -553,6 +558,7 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
                 return;
             }
 
+            startNewTake ("Claude");
             baseSpec = result.spec;
             baseSpec.interpretation.insert (baseSpec.interpretation.begin(),
                                             "Planned by " + (result.model.isNotEmpty() ? result.model : settings->getModel()).toStdString());
@@ -582,15 +588,23 @@ void PromptMidiProcessor::makeVariation()
 
     // Same key, tempo, length and instruments; new harmony (unless Claude planned it), new
     // accompaniment figures, and - from the new seed - a new theme, form and orchestration.
+    startNewTake ("Variation");
     variationSeed = randomSeed();
     applySpec (pm::varySpec (spec, variationSeed, lastEngine == Engine::Claude), variationSeed);
-    setStatus (Status::Idle, "New variation: same key, tempo and instruments, new music.");
+    setStatus (Status::Idle, "New variation: same key, tempo and instruments, new music. The previous take is one click back.");
 }
 
 void PromptMidiProcessor::controlsChanged()
 {
     if (claudeJob != nullptr || spec.tracks.empty())
         return;
+
+    // Re-composing replaces the take on screen - unless it has edits, which are kept as their own take.
+    const bool keepEdits = isEdited();
+    const juce::String kept = keepEdits ? juce::String (" Your edited take is kept: go back with the take arrows.") : juce::String();
+
+    if (keepEdits)
+        startNewTake ("New settings");
 
     if (lastEngine == Engine::Offline)
     {
@@ -601,7 +615,7 @@ void PromptMidiProcessor::controlsChanged()
             s = pm::varySpec (s, variationSeed);
 
         applySpec (s, seed);
-        setStatus (Status::Idle, "Updated.");
+        setStatus (Status::Idle, "Updated." + kept);
         return;
     }
 
@@ -611,12 +625,29 @@ void PromptMidiProcessor::controlsChanged()
     applySpec (s, seed);
 
     const bool modeDiffers = controls.mode >= 0 && (pm::Mode) controls.mode != baseSpec.mode;
-    setStatus (Status::Idle, modeDiffers ? "Updated. Press Generate to have Claude re-plan in the new scale."
-                                         : "Updated.");
+    setStatus (Status::Idle, (modeDiffers ? "Updated. Press Generate to have Claude re-plan in the new scale."
+                                          : "Updated.") + kept);
+}
+
+void PromptMidiProcessor::startNewTake (const juce::String& kind)
+{
+    if (hasComposition() && currentTake >= 0)
+        storeTake();   // the take we leave, with its edits
+
+    takes.emplace_back();
+    takes.back().kind = kind;
+
+    if ((int) takes.size() > maxTakes)
+        takes.erase (takes.begin());
+
+    currentTake = (int) takes.size() - 1;
 }
 
 void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed)
 {
+    if (takes.empty())
+        startNewTake ("Generated");
+
     spec = newSpec;
     seed = newSeed;
     composition = pm::compose (spec, seed);
@@ -624,7 +655,89 @@ void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newS
     undoManager.clearUndoHistory();
     edited = false;
     cursorTick = juce::jlimit (0.0, (double) juce::jmax (0, composition.lengthTicks - 1), cursorTick);
+    storeTake();
     publishPlayback();
+}
+
+void PromptMidiProcessor::storeTake()
+{
+    if (currentTake < 0 || currentTake >= (int) takes.size())
+        return;
+
+    auto& t = takes[(size_t) currentTake];
+    t.spec = spec;
+    t.baseSpec = baseSpec;
+    t.composition = composition;
+    t.prompt = lastPrompt;
+    t.engine = lastEngine;
+    t.seed = seed;
+    t.interpretSeed = interpretSeed;
+    t.variationSeed = variationSeed;
+    t.muted = mutedMask.load();
+    t.edited = isEdited();
+}
+
+void PromptMidiProcessor::resetTakes()
+{
+    takes.clear();
+    currentTake = -1;
+
+    if (hasComposition())
+    {
+        takes.emplace_back();
+        takes.back().kind = "Restored";
+        currentTake = 0;
+        storeTake();
+    }
+}
+
+void PromptMidiProcessor::selectTake (int index)
+{
+    if (claudeJob != nullptr || index < 0 || index >= (int) takes.size() || index == currentTake)
+        return;
+
+    storeTake();
+    currentTake = index;
+    const auto& t = takes[(size_t) index];
+    spec = t.spec;
+    baseSpec = t.baseSpec;
+    composition = t.composition;
+    lastPrompt = t.prompt;
+    lastEngine = t.engine;
+    seed = t.seed;
+    interpretSeed = t.interpretSeed;
+    variationSeed = t.variationSeed;
+    mutedMask.store (t.muted);
+    edited = t.edited;   // edits made before this visit; new ones count through the undo history
+    ++pieceVersion;
+    undoManager.clearUndoHistory();
+    cursorTick = juce::jlimit (0.0, (double) juce::jmax (0, composition.lengthTicks - 1), cursorTick);
+
+    if (previewPlaying.load())
+        setPreviewPlaying (true, cursorTick);
+
+    setStatus (Status::Idle, "Take " + juce::String (index + 1) + " of " + juce::String ((int) takes.size())
+                                 + (isEdited() ? juce::String (" (edited)") : juce::String()) + ".");
+    publishPlayback();
+}
+
+juce::String PromptMidiProcessor::getTakeTitle (int index) const
+{
+    if (index < 0 || index >= (int) takes.size())
+        return {};
+
+    // "Variation  -  Epic Battle  -  Eb Minor, 101 BPM (edited)": takes of one prompt share a title.
+    const auto& t = index == currentTake ? composition : takes[(size_t) index].composition;
+    const bool takeEdited = index == currentTake ? isEdited() : takes[(size_t) index].edited;
+    const auto details = juce::StringArray::fromTokens (fromStd (t.summary()), juce::String::fromUTF8 ("\xc2\xb7"), {});
+    const auto dash = juce::String::fromUTF8 ("  \xe2\x80\x94  ");
+    juce::String text = takes[(size_t) index].kind;
+    text << (text.isEmpty() ? juce::String() : dash) << fromStd (t.title);
+
+    if (details.size() >= 2)
+        text << dash << details[0].trim() << ", " << details[1].trim();
+
+    return text + (takeEdited ? juce::String (" (edited)") : juce::String());
 }
 
 //==============================================================================
@@ -657,7 +770,6 @@ void PromptMidiProcessor::setTrackNotes (int trackIndex, const std::vector<pm::N
 
     composition.bars = (composition.lengthTicks + composition.ticksPerBar - 1) / juce::jmax (1, composition.ticksPerBar);
     composition.quality = pm::checkQuality (composition);
-    edited = true;
     publishPlayback();
 }
 
@@ -865,6 +977,7 @@ void PromptMidiProcessor::getStateInformation (juce::MemoryBlock& destData)
         xml.setAttribute ("instruments", juce::JSON::toString (juce::var (list), true));
     }
     xml.setAttribute ("muted", juce::String ((juce::int64) mutedMask.load()));
+    xml.setAttribute ("edited", isEdited());
 
     xml.setAttribute ("lastPrompt", lastPrompt);
     xml.setAttribute ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
@@ -949,8 +1062,10 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
             composition = restored;
             ++pieceVersion;
             undoManager.clearUndoHistory();
-            publishPlayback();
+            edited = xml->getBoolAttribute ("edited");
             mutedMask.store ((uint64_t) xml->getStringAttribute ("muted", "0").getLargeIntValue());
+            resetTakes();
+            publishPlayback();
             statusMessage = "Restored from the project.";
         }
 

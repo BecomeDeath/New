@@ -98,6 +98,15 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
     if (! settings.apiKeyComesFromEnvironment())
         keyEditor.setText (settings.getApiKey(), false);
 
+    // Esc closes the panel, Return saves - from any field.
+    for (auto* e : { &keyEditor, &modelEditor })
+    {
+        e->setEscapeAndReturnKeysConsumed (false);
+        e->onReturnKey = [this] { saveButton.triggerClick(); };
+    }
+
+    keyEditor.onTextChange = [this] { clearButton.setEnabled (keyEditor.getText().isNotEmpty()); };
+
     modelEditor.setFont (font (14.0f));
     modelEditor.setText (settings.getModel(), false);
     modelEditor.setTextToShowWhenEmpty (Settings::defaultModel, Theme::textDim);
@@ -110,9 +119,15 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
 
     styleLabel (note, 12.0f, Theme::textDim);
     note.setJustificationType (juce::Justification::topLeft);
+    auto path = settings.getFile().getFullPathName();
+    const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getFullPathName();
+
+    if (home.isNotEmpty() && path.startsWith (home))
+        path = "~" + path.substring (home.length());
+
     note.setText ("Claude reads your prompt and writes the composition plan (key, harmony, instruments, theme); "
                   "PromptMIDI then writes the notes. The key is stored only on this computer, in\n"
-                  + settings.getFile().getFullPathName()
+                  + path
                   + "\nIt is sent only to api.anthropic.com and is never saved in your DAW projects. "
                     "Requests are billed to your Anthropic account.",
                   juce::dontSendNotification);
@@ -134,7 +149,8 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
             box->dismiss();
     };
 
-    clearButton.onClick = [this] { keyEditor.clear(); };
+    clearButton.onClick = [this] { keyEditor.clear(); clearButton.setEnabled (false); };
+    clearButton.setEnabled (keyEditor.getText().isNotEmpty());
 
     // MIDI export: how articulations reach the sample library.
     styleLabel (exportHeading, 16.0f, Theme::text, true);
@@ -156,6 +172,9 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
 
     valuesEditor.setFont (font (14.0f));
     controllerEditor.setFont (font (14.0f));
+
+    for (auto* e : { &valuesEditor, &controllerEditor })
+        e->setEscapeAndReturnKeysConsumed (false);
     controllerEditor.setInputRestrictions (3, "0123456789");
     controllerEditor.setText (juce::String (settings.getArticulationController()), false);
 
@@ -421,12 +440,22 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     for (auto* l : { &titleLabel, &summaryLabel, &interpretationLabel, &statusLabel, &qualityLabel })
         addAndMakeVisible (l);
 
+    prevTakeButton.setTooltip ("Previous take");
+    nextTakeButton.setTooltip ("Next take");
+    takeButton.setTooltip ("Every Generate and Variation is a new take, edits included: pick an earlier one to go back to it");
+    prevTakeButton.onClick = [this] { processor.selectTake (processor.getCurrentTake() - 1); };
+    nextTakeButton.onClick = [this] { processor.selectTake (processor.getCurrentTake() + 1); };
+    takeButton.onClick = [this] { showTakeMenu(); };
+
+    for (auto* b : std::initializer_list<juce::Component*> { &prevTakeButton, &takeButton, &nextTakeButton })
+        addChildComponent (b);
+
     arrangement.setComponentID ("arrangement");
     addAndMakeVisible (arrangement);
 
     // Transport
     playButton.setTooltip ("Preview the result here (Space). The preview is only heard inside PromptMIDI - never with your DAW's playback.");
-    playButton.onClick = [this] { processor.setPreviewPlaying (! processor.isPreviewPlaying(), processor.getCursorTick()); };
+    playButton.onClick = [this] { togglePreview(); };
     addAndMakeVisible (playButton);
 
     styleLabel (positionLabel, 13.0f, Theme::textMid);
@@ -591,7 +620,7 @@ void PromptMidiEditor::resized()
     const int naturalBoxes = 74 + 150 + 116 + 70 + 140 + 156 + 84;
     const double scale = juce::jlimit (0.6, 1.0, (double) (controlsRow.getWidth() - fixedWidth) / naturalBoxes);
 
-    auto place = [&] (juce::Component* label, juce::Component& comp, int labelW, int compW)
+    auto place = [&] (juce::Component* label, juce::Component& comp, int labelW, int compW, int minW)
     {
         if (label != nullptr)
         {
@@ -599,16 +628,16 @@ void PromptMidiEditor::resized()
             controlsRow.removeFromLeft (6);
         }
 
-        comp.setBounds (controlsRow.removeFromLeft ((int) (compW * scale)));
+        comp.setBounds (controlsRow.removeFromLeft (juce::jmax (minW, (int) (compW * scale))));
         controlsRow.removeFromLeft (12);
     };
 
-    place (&keyLabel, keyBox, 30, 74);
-    place (&scaleLabel, scaleBox, 40, 150);
-    place (&tempoLabel, tempoSlider, 44, 116);
-    place (&barsLabel, barsBox, 34, 70);
-    place (&lengthLabel, lengthBox, 46, 140);
-    place (nullptr, instrumentsButton, 0, 156);
+    place (&keyLabel, keyBox, 30, 74, 66);
+    place (&scaleLabel, scaleBox, 40, 150, 100);
+    place (&tempoLabel, tempoSlider, 44, 116, 80);
+    place (&barsLabel, barsBox, 34, 70, 66);
+    place (&lengthLabel, lengthBox, 46, 140, 96);
+    place (nullptr, instrumentsButton, 0, 156, 120);
     lockSeedButton.setBounds (controlsRow.removeFromRight (32));
     controlsRow.removeFromRight (6);
     seedValue.setBounds (controlsRow.removeFromRight ((int) (84 * scale)));
@@ -618,6 +647,13 @@ void PromptMidiEditor::resized()
     // Result summary
     r.removeFromTop (14);
     auto line1 = r.removeFromTop (26);
+    auto takeArea = line1.removeFromRight (172);
+    nextTakeButton.setBounds (takeArea.removeFromRight (26).reduced (0, 1));
+    takeArea.removeFromRight (4);
+    prevTakeButton.setBounds (takeArea.removeFromLeft (26).reduced (0, 1));
+    takeArea.removeFromLeft (4);
+    takeButton.setBounds (takeArea.reduced (0, 1));
+    line1.removeFromRight (12);
     statusLabel.setBounds (line1.removeFromRight (line1.getWidth() / 2));
     titleLabel.setBounds (line1);
     auto line2 = r.removeFromTop (20);
@@ -634,11 +670,87 @@ bool PromptMidiEditor::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::spaceKey && processor.hasComposition())
     {
-        processor.setPreviewPlaying (! processor.isPreviewPlaying(), processor.getCursorTick());
+        togglePreview();
+        return true;
+    }
+
+    // Undo / redo note edits from anywhere in the window (the prompt box keeps its own text undo).
+    const auto code = key.getKeyCode() < 256 ? juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key.getKeyCode()) : 0;
+
+    if (key.getModifiers().isCommandDown() && (code == 'Z' || code == 'Y'))
+    {
+        auto& um = processor.getUndoManager();
+
+        if (code == 'Y' || key.getModifiers().isShiftDown())
+            um.redo();
+        else
+            um.undo();
+
         return true;
     }
 
     return false;
+}
+
+void PromptMidiEditor::togglePreview()
+{
+    if (! processor.hasComposition())
+        return;
+
+    const bool start = ! processor.isPreviewPlaying();
+
+    if (start && processor.isBypassedByHost() && processor.getMsSinceLastAudio() < 1000)
+    {
+        setStatusText ("PromptMIDI is bypassed in your DAW: turn it back on to hear the preview.", Theme::playhead);
+        return;
+    }
+
+    processor.setPreviewPlaying (start, processor.getCursorTick());
+}
+
+void PromptMidiEditor::updateTakes()
+{
+    const int n = processor.getNumTakes(), current = processor.getCurrentTake();
+    const bool show = n > 1;
+
+    for (auto* b : std::initializer_list<juce::Component*> { &prevTakeButton, &takeButton, &nextTakeButton })
+        b->setVisible (show);
+
+    takeButton.setButtonText ("Take " + juce::String (current + 1) + " of " + juce::String (n));
+    const bool idle = ! processor.isGenerating();
+    prevTakeButton.setEnabled (idle && current > 0);
+    nextTakeButton.setEnabled (idle && current < n - 1);
+    takeButton.setEnabled (idle);
+}
+
+void PromptMidiEditor::showTakeMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&lookAndFeel);
+    menu.addSectionHeader ("Takes");
+
+    for (int i = processor.getNumTakes() - 1; i >= 0; --i)
+        menu.addItem (i + 1, juce::String (i + 1) + "   " + processor.getTakeTitle (i), true, i == processor.getCurrentTake());
+
+    juce::Component::SafePointer<PromptMidiEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&takeButton), [safe] (int result)
+    {
+        if (safe != nullptr && result > 0)
+            safe->processor.selectTake (result - 1);
+    });
+}
+
+juce::String PromptMidiEditor::instrumentsText() const
+{
+    const auto& choices = processor.controls.instruments;
+
+    if (choices.empty())
+        return "Instruments: Auto";
+
+    if (choices.size() == 1)
+        return fromStd (choices.front().name);
+
+    return juce::String ((int) choices.size()) + " instruments";
 }
 
 void PromptMidiEditor::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -685,7 +797,7 @@ void PromptMidiEditor::refreshFromProcessor()
         q << "Quality " << juce::String (comp.quality.score, 1) << " / 10";
 
         if (comp.quality.candidates > 1)
-            q << juce::String::fromUTF8 ("  \xc2\xb7  ") << "best of " << comp.quality.candidates << " takes";
+            q << juce::String::fromUTF8 ("  \xc2\xb7  ") << "best of " << comp.quality.candidates << " drafts";
 
         juce::StringArray details;
 
@@ -719,7 +831,11 @@ void PromptMidiEditor::refreshFromProcessor()
 
     seedValue.setText (juce::String ((juce::int64) processor.seed), juce::dontSendNotification);
     lockSeedButton.setToggleState (processor.seedLocked, juce::dontSendNotification);
-    instrumentsButton.setLabel ("Instruments: " + InstrumentPicker::summary (processor.controls.instruments));
+    instrumentsButton.setLabel (instrumentsText());
+    instrumentsButton.setTooltip (processor.controls.instruments.empty()
+                                      ? juce::String ("Choose the instruments: automatic from the prompt, or your own - one for a solo piece, or any ensemble")
+                                      : "Your instruments: " + InstrumentPicker::summary (processor.controls.instruments) + ". Click to change.");
+    updateTakes();
     positionLabel.setText (has ? timeText (processor.getPlayheadTick() >= 0.0 ? processor.getPlayheadTick() : processor.getCursorTick(), comp)
                                : juce::String(), juce::dontSendNotification);
 
@@ -750,6 +866,30 @@ void PromptMidiEditor::timerCallback()
     playButton.setIcon (playing ? Icons::Kind::Stop : Icons::Kind::Play);
     positionLabel.setText (processor.hasComposition() ? timeText (head >= 0.0 ? head : processor.getCursorTick(), processor.getComposition())
                                                       : juce::String(), juce::dontSendNotification);
+
+    // A preview needs the audio to run: say so when it doesn't, instead of a play button that does nothing.
+    if (playing)
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+
+        if (previewStartedAt == 0)
+        {
+            previewStartedAt = now;
+        }
+        else if (! audioHintShown && now - previewStartedAt > 900 && processor.getMsSinceLastAudio() > 700)
+        {
+            audioHintShown = true;
+            setStatusText (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone
+                               ? "No audio output: choose one in Options > Audio/MIDI Settings to hear the preview."
+                               : "Your DAW isn't processing audio, so the preview can't play: check its audio engine.",
+                           Theme::playhead);
+        }
+    }
+    else
+    {
+        previewStartedAt = 0;
+        audioHintShown = false;
+    }
 
     if (processor.getStatus() == PromptMidiProcessor::Status::Working)
     {
@@ -827,13 +967,27 @@ void PromptMidiEditor::showSettings()
 void PromptMidiEditor::showInstruments()
 {
     juce::Component::SafePointer<PromptMidiEditor> safe (this);
-    auto picker = std::make_unique<InstrumentPicker> (processor.controls.instruments, [safe] (const InstrumentPicker::Choices& choices)
+    // What the piece on screen uses, so "Customise these" can start from it.
+    InstrumentPicker::Choices ensemble;
+
+    for (auto& t : processor.getComposition().tracks)
+    {
+        if (t.splitFrom >= 0)
+            continue;
+
+        pm::InstrumentChoice c;
+        c.name = t.name;
+        c.program = t.isDrum ? -1 : t.program;
+        ensemble.push_back (c);
+    }
+
+    auto picker = std::make_unique<InstrumentPicker> (processor.controls.instruments, ensemble, [safe] (const InstrumentPicker::Choices& choices)
     {
         if (safe == nullptr)
             return;
 
         safe->processor.controls.instruments = choices;
-        safe->instrumentsButton.setLabel ("Instruments: " + InstrumentPicker::summary (choices));
+        safe->instrumentsButton.setLabel (safe->instrumentsText());
 
         if (safe->processor.hasComposition())
             safe->processor.controlsChanged();
