@@ -37,6 +37,12 @@ struct StyleInfo
     std::string displayName;
 };
 
+/** A new take on a plan, for the Variation button: the same key, mode, tempo, length and
+    instruments, with new harmony (unless keepHarmony, e.g. for a plan Claude wrote) and new
+    accompaniment figures. Compose the result with a new seed for a new theme, form and
+    orchestration. */
+StyleSpec varySpec (const StyleSpec& spec, uint64_t seed, bool keepHarmony = false);
+
 /** The built-in genre templates, in display order. */
 std::vector<StyleInfo> builtInStyles();
 

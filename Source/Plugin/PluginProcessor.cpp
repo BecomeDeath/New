@@ -10,10 +10,11 @@ namespace
     {
         using namespace juce;
         return {
+            // The preview sound is heard only while previewing inside PromptMIDI (its Play button).
             std::make_unique<AudioParameterBool>  (ParameterID { "previewSound", 1 }, "Preview Sound", true),
             std::make_unique<AudioParameterFloat> (ParameterID { "previewVolume", 1 }, "Preview Volume", NormalisableRange<float> (0.0f, 1.0f), 0.7f),
-            std::make_unique<AudioParameterBool>  (ParameterID { "midiOut", 1 }, "MIDI Output", true),
-            std::make_unique<AudioParameterBool>  (ParameterID { "syncHost", 1 }, "Sync to Host", true),
+            // Opt-in: send the piece as MIDI out while the host plays (to drive other instruments). Never audio.
+            std::make_unique<AudioParameterBool>  (ParameterID { "hostMidiOut", 2 }, "Send MIDI with Host", false),
             std::make_unique<AudioParameterBool>  (ParameterID { "loop", 1 }, "Loop", true),
         };
     }
@@ -27,11 +28,11 @@ PromptMidiProcessor::PromptMidiProcessor()
 {
     previewSoundParam  = parameters.getRawParameterValue ("previewSound");
     previewVolumeParam = parameters.getRawParameterValue ("previewVolume");
-    midiOutParam       = parameters.getRawParameterValue ("midiOut");
-    syncHostParam      = parameters.getRawParameterValue ("syncHost");
+    hostMidiOutParam   = parameters.getRawParameterValue ("hostMidiOut");
     loopParam          = parameters.getRawParameterValue ("loop");
 
     generatedMidi.ensureSize (8192);
+    panicMidi.ensureSize (4096);
     statusMessage = "Describe the music you want, then press Generate.";
     startTimer (500);
 }
@@ -69,7 +70,7 @@ void PromptMidiProcessor::allNotesOff (int samplePosition)
         {
             if (activeNotes[(size_t) ch][(size_t) note] > 0)
             {
-                generatedMidi.addEvent (juce::MidiMessage::noteOff (ch + 1, note), samplePosition);
+                panicMidi.addEvent (juce::MidiMessage::noteOff (ch + 1, note), samplePosition);
                 activeNotes[(size_t) ch][(size_t) note] = 0;
             }
         }
@@ -130,6 +131,7 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const int numSamples = buffer.getNumSamples();
     buffer.clear();
     generatedMidi.clear();
+    panicMidi.clear();
 
     if (numSamples <= 0)
         return;
@@ -171,30 +173,57 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     bool playing = false;
     double startTick = 0.0, ticksPerSample = 0.0;
-    const bool followHost = syncHostParam->load() > 0.5f && hostPlaying;
+    const bool followHost = hostMidiOutParam->load() > 0.5f && hostPlaying;
+
+    // The in-plugin preview never plays along with the host: when the host starts, it stops.
+    if (hostPlaying && previewPlaying.load())
+    {
+        previewPlaying.store (false);
+        stopPreviewSound = true;
+    }
+
+    if (stopPreviewSound)
+    {
+        allNotesOff (0);
+        synth.reset();
+        stopPreviewSound = false;
+        wasPlaying = false;
+        expectedTick = -1.0;
+    }
+
+    Destination destination = Destination::None;
 
     if (data != nullptr && data->lengthTicks > 0)
     {
         if (followHost)
         {
             playing = true;
+            destination = Destination::MidiOut;
             ticksPerSample = hostBpm / 60.0 * pm::kPpq / currentSampleRate;
             startTick = hostPpq * pm::kPpq;
         }
-        else if (previewPlaying.load())
+        else if (previewPlaying.load() && ! hostPlaying)
         {
             if (previewRestart.exchange (false))
             {
-                internalTick = 0.0;
+                internalTick = previewStartTick.load();
                 expectedTick = -1.0;
                 allNotesOff (0);
             }
 
             playing = true;
+            destination = Destination::Preview;
             ticksPerSample = data->tempo / 60.0 * pm::kPpq / currentSampleRate;
             startTick = internalTick;
             internalTick += ticksPerSample * numSamples;
         }
+    }
+
+    if (destination != lastDestination)
+    {
+        // Switching between preview and host output: end whatever the old destination was playing.
+        allNotesOff (0);
+        lastDestination = destination;
     }
 
     if (! playing)
@@ -264,8 +293,17 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         }
     }
 
-    // Preview synth
-    if (previewSoundParam->load() > 0.5f)
+    // Note-offs from a stop or a jump go to both destinations (harmless where nothing sounds).
+    if (! panicMidi.isEmpty())
+    {
+        for (const auto meta : panicMidi)
+            synth.handle (meta.getMessage());
+
+        midi.addEvents (panicMidi, 0, numSamples, 0);
+    }
+
+    // The preview synth sounds only for the in-plugin preview; its audio never follows the host.
+    if (destination == Destination::Preview && previewSoundParam->load() > 0.5f)
     {
         const float gain = previewVolumeParam->load();
         int pos = 0;
@@ -290,13 +328,51 @@ void PromptMidiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     }
     else if (synthHadSound)
     {
-        synth.reset();
-        synthHadSound = false;
+        // Let released notes ring out briefly after a stop, then go silent.
+        synth.render (buffer, 0, numSamples, previewVolumeParam->load());
+
+        if (++silentBlocks > 64)
+        {
+            synth.reset();
+            synthHadSound = false;
+            silentBlocks = 0;
+        }
     }
 
-    // Incoming MIDI passes through; the generated part is added on top.
-    if (midiOutParam->load() > 0.5f && ! generatedMidi.isEmpty())
+    if (synthHadSound && destination == Destination::Preview)
+        silentBlocks = 0;
+
+    // Incoming MIDI passes through; with "Send MIDI with host" the piece is added on top.
+    if (destination == Destination::MidiOut && ! generatedMidi.isEmpty())
         midi.addEvents (generatedMidi, 0, numSamples, 0);
+}
+
+void PromptMidiProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    // Bypassed: silence, end every note this plug-in started, and stop the preview.
+    buffer.clear();
+    panicMidi.clear();
+    previewPlaying.store (false);
+    allNotesOff (0);
+
+    if (! panicMidi.isEmpty())
+        midi.addEvents (panicMidi, 0, juce::jmax (1, buffer.getNumSamples()), 0);
+
+    synth.reset();
+    synthHadSound = false;
+    wasPlaying = false;
+    expectedTick = -1.0;
+    lastDestination = Destination::None;
+    playheadTick.store (-1.0);
+}
+
+void PromptMidiProcessor::releaseResources()
+{
+    synth.reset();
+    previewPlaying.store (false);
+
+    for (auto& ch : activeNotes)
+        ch.fill (0);
 }
 
 //==============================================================================
@@ -392,6 +468,7 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
     {
         lastPrompt = prompt;
         lastEngine = Engine::Offline;
+        variationSeed = 0;
         interpretSeed = newSeed;
         baseSpec = pm::interpretPrompt (prompt.toStdString(), newSeed, promptOverrides());
         mutedMask.store (0);
@@ -433,6 +510,7 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
                                             "Planned by " + (result.model.isNotEmpty() ? result.model : settings->getModel()).toStdString());
             lastPrompt = requestPrompt;
             lastEngine = Engine::Claude;
+            variationSeed = 0;
             interpretSeed = newSeed;
 
             auto s = baseSpec;
@@ -454,8 +532,11 @@ void PromptMidiProcessor::makeVariation()
         return;
     }
 
-    applySpec (spec, randomSeed());
-    setStatus (Status::Idle, "New variation of the same plan.");
+    // Same key, tempo, length and instruments; new harmony (unless Claude planned it), new
+    // accompaniment figures, and - from the new seed - a new theme, form and orchestration.
+    variationSeed = randomSeed();
+    applySpec (pm::varySpec (spec, variationSeed, lastEngine == Engine::Claude), variationSeed);
+    setStatus (Status::Idle, "New variation: same key, tempo and instruments, new music.");
 }
 
 void PromptMidiProcessor::controlsChanged()
@@ -466,7 +547,12 @@ void PromptMidiProcessor::controlsChanged()
     if (lastEngine == Engine::Offline)
     {
         // Same prompt, same seed, new controls: only what the controls touch changes.
-        applySpec (pm::interpretPrompt (lastPrompt.toStdString(), interpretSeed, promptOverrides()), seed);
+        auto s = pm::interpretPrompt (lastPrompt.toStdString(), interpretSeed, promptOverrides());
+
+        if (variationSeed != 0)
+            s = pm::varySpec (s, variationSeed);
+
+        applySpec (s, seed);
         setStatus (Status::Idle, "Updated.");
         return;
     }
@@ -556,10 +642,13 @@ bool PromptMidiProcessor::isTrackMuted (int index) const
     return index >= 0 && index < maxMutableTracks && ((mutedMask.load() >> index) & 1u);
 }
 
-void PromptMidiProcessor::setPreviewPlaying (bool shouldPlay)
+void PromptMidiProcessor::setPreviewPlaying (bool shouldPlay, double fromTick)
 {
     if (shouldPlay)
+    {
+        previewStartTick.store (juce::jmax (0.0, fromTick));
         previewRestart.store (true);
+    }
 
     previewPlaying.store (shouldPlay);
 }
@@ -641,6 +730,7 @@ void PromptMidiProcessor::getStateInformation (juce::MemoryBlock& destData)
     xml.setAttribute ("lastPrompt", lastPrompt);
     xml.setAttribute ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
     xml.setAttribute ("interpretSeed", juce::String ((juce::int64) interpretSeed));
+    xml.setAttribute ("variationSeed", juce::String ((juce::int64) variationSeed));
 
     if (hasComposition())
     {
@@ -689,6 +779,7 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         lastPrompt = xml->getStringAttribute ("lastPrompt", prompt);
         lastEngine = xml->getStringAttribute ("lastEngine") == "claude" ? Engine::Claude : Engine::Offline;
         interpretSeed = (uint64_t) xml->getStringAttribute ("interpretSeed", juce::String ((juce::int64) seed)).getLargeIntValue();
+        variationSeed = (uint64_t) xml->getStringAttribute ("variationSeed", "0").getLargeIntValue();
 
         if (haveSpec)
         {

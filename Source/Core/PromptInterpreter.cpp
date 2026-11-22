@@ -1,4 +1,5 @@
 #include "PromptInterpreter.h"
+#include "Learned.h"
 #include "Rng.h"
 
 #include <algorithm>
@@ -351,7 +352,7 @@ const std::vector<StyleTemplate>& styles()
             { "Drums",         R::Percussion, 0, 35, 81, 0.50, 80, 0, "jazz" } } },
 
         { "lofi", "Lo-Fi Hip Hop",
-          { { "lofi", 3 }, { "lo fi", 3 }, { "chillhop", 3 }, { "study", 1.5 }, { "study beats", 3 }, { "chill", 1.5 }, { "chilled", 1.5 },
+          { { "lofi", 3 }, { "lo fi", 3 }, { "lofi hip hop", 5 }, { "lo fi hip hop", 5 }, { "chillhop", 3 }, { "study", 1.5 }, { "study beats", 3 }, { "chill", 1.5 }, { "chilled", 1.5 },
             { "cozy", 1.5 }, { "rainy", 1.5 }, { "cafe", 1.5 }, { "coffee", 1.5 }, { "jazzhop", 3 }, { "mellow", 1 } },
           70, 90, { M::Major, M::Dorian, M::Minor },
           { { "Imaj7", "vi7", "ii7", "V7" }, { "IVmaj7", "iii7", "ii7", "Imaj7" }, { "Imaj7", "iii7", "IVmaj7", "iv7" }, { "ii9", "V9", "Imaj9", "Imaj9" } },
@@ -1080,6 +1081,28 @@ std::string makeTitle (const std::vector<std::string>& tokens, const std::vector
     return title.empty() ? fallback : title;
 }
 
+void chooseLearnedHarmony (StyleSpec& spec, Rng& rng, double probability, std::vector<std::vector<std::string>> avoid)
+{
+    const auto mix = detail::familiesFor (spec);
+
+    if (rng.chance (probability))
+    {
+        auto p = detail::learnedProgression (mix, spec.mode, rng, avoid);
+
+        if (! p.empty())
+            spec.progression = p;
+    }
+
+    if (rng.chance (probability))
+    {
+        avoid.push_back (spec.progression);
+        auto b = detail::learnedProgression (mix, spec.mode, rng, avoid);
+
+        if (! b.empty())
+            spec.progressionB = b;
+    }
+}
+
 std::string lowerCopy (std::string s)
 {
     for (auto& c : s)
@@ -1155,6 +1178,61 @@ int familyOf (int program)
 } // namespace
 
 //==============================================================================
+StyleSpec varySpec (const StyleSpec& in, uint64_t seed, bool keepHarmony)
+{
+    StyleSpec s = in;
+    Rng rng (seed ^ 0x7A21A710ull);
+
+    if (! keepHarmony)
+    {
+        const auto old = s.progression;
+        chooseLearnedHarmony (s, rng, 1.0, { old });
+
+        // No corpus data for this mode (Dorian, Lydian, exotic scales): another built-in progression.
+        if (s.progression == old)
+        {
+            const auto& bank = modeProgressions (s.mode);
+            std::vector<Prog> others;
+
+            for (auto& p : bank)
+                if (std::vector<std::string> (p.begin(), p.end()) != old)
+                    others.push_back (p);
+
+            if (! others.empty())
+            {
+                const auto& p = others[(size_t) rng.range (0, (int) others.size() - 1)];
+                s.progression.assign (p.begin(), p.end());
+            }
+        }
+    }
+
+    // New accompaniment figures within the same family, so the groove keeps its character.
+    static const std::vector<std::vector<std::string>> families {
+        { "block", "pulse", "sustain" }, { "broken", "alberti" }, { "stabs", "offbeat" },
+        { "up", "down", "updown", "random" }, { "root", "rootfifth", "octave" }, { "syncopated", "offbeat" },
+        { "sustained", "flowing" } };
+
+    for (auto& t : s.tracks)
+    {
+        if (t.role == Role::Percussion || t.role == Role::Melody)
+            continue;
+
+        for (auto& fam : families)
+        {
+            if (std::find (fam.begin(), fam.end(), t.pattern) != fam.end() && rng.chance (0.6))
+            {
+                t.pattern = fam[(size_t) rng.range (0, (int) fam.size() - 1)];
+                break;
+            }
+        }
+
+        t.density = std::max (0.05, std::min (0.95, t.density + rng.uniform (-0.08, 0.08)));
+    }
+
+    normalizeSpec (s);
+    return s;
+}
+
 std::vector<StyleInfo> builtInStyles()
 {
     std::vector<StyleInfo> out;
@@ -2043,6 +2121,13 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
                     line = line.substr (0, comma) + ", " + what + line.substr (meter);
             }
         }
+    }
+
+    // Harmony learned from the corpus: most pieces take a progression that pieces of the same
+    // family (cinematic, dark, emotional...) actually use, rather than the template's few.
+    {
+        Rng hr (seed ^ 0x4A4D0ull);
+        chooseLearnedHarmony (spec, hr, 0.65, {});
     }
 
     spec.title = makeTitle (tokens, titleSkip, style->name);

@@ -1,4 +1,5 @@
 #include "CueEngine.h"
+#include "Learned.h"
 #include "ComposerDetail.h"
 #include "QualityCheck.h"
 
@@ -109,15 +110,60 @@ std::vector<CueSection> planForm (const StyleSpec& s, int targetBars, bool loopa
     const int N = std::max (4, (targetBars + 2) / 4);
     std::vector<P> plan;
 
-    if (N <= 4)       plan = std::vector<P> { { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
-    else if (N == 5)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Climax, 1 }, { Kind::Outro, 1 } };
-    else if (N <= 7)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else if (N <= 9)  plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else if (N <= 12) plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
-    else              plan = std::vector<P> { { Kind::Intro, 1 }, { Kind::Statement, 2 }, { Kind::Restatement, 2 }, { Kind::Development, 2 }, { Kind::Contrast, 2 }, { Kind::Build, 1 }, { Kind::Climax, 2 }, { Kind::Outro, 1 } };
+    using K = Kind;
+    const int layout = rng.range (0, 3);
 
-    if (N == 6)
-        plan.erase (plan.begin() + 2);   // no room for a build
+    if (N <= 4)
+    {
+        plan = layout % 2 == 0 ? std::vector<P> { { K::Statement, 2 }, { K::Climax, 1 }, { K::Outro, 1 } }
+                               : std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Outro, 1 } };
+    }
+    else if (N == 5)
+    {
+        plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Climax, 1 }, { K::Outro, 1 } };
+    }
+    else if (N <= 7)
+    {
+        plan = layout % 2 == 0 ? std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }
+                               : std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Development, 1 }, { K::Climax, 2 }, { K::Outro, 1 } };
+
+        if (N == 6)
+            plan.erase (plan.begin() + 2);   // no room for a build
+    }
+    else if (N <= 9)
+    {
+        switch (layout)
+        {
+            case 0:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Contrast, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 1:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Development, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 2:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Contrast, 2 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            default: plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Restatement, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+        }
+    }
+    else if (N <= 12)
+    {
+        switch (layout)
+        {
+            case 0:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Restatement, 2 }, { K::Contrast, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 1:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Contrast, 2 }, { K::Restatement, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 2:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Development, 2 }, { K::Contrast, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            default: plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Restatement, 2 }, { K::Development, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+        }
+    }
+    else
+    {
+        switch (layout)
+        {
+            case 0:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Restatement, 2 }, { K::Development, 2 }, { K::Contrast, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 1:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Contrast, 2 }, { K::Restatement, 2 }, { K::Development, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            case 2:  plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Development, 2 }, { K::Contrast, 2 }, { K::Restatement, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+            default: plan = std::vector<P> { { K::Intro, 1 }, { K::Statement, 2 }, { K::Restatement, 2 }, { K::Contrast, 2 }, { K::Development, 2 }, { K::Build, 1 }, { K::Climax, 2 }, { K::Outro, 1 } }; break;
+        }
+    }
+
+    // Energetic cues sometimes open cold, straight into the theme.
+    if (energy >= 0.7 && N >= 8 && plan.front().k == K::Intro && rng.chance (0.35))
+        plan.erase (plan.begin());
 
     if (N >= 20)
     {
@@ -258,7 +304,9 @@ std::vector<CueSection> planForm (const StyleSpec& s, int targetBars, bool loopa
             out[i].mode = out[i + 1].mode;
         }
 
-    if (loopable && ! out.empty() && out.back().kind == Kind::Outro)
+    const bool button = ! loopable && energy >= 0.65 && rng.chance (0.4);
+
+    if ((loopable || button) && ! out.empty() && out.back().kind == Kind::Outro)
     {
         // A loopable cue ends its loop after the last climax; a short stinger follows for the
         // game to play when the scene ends.
@@ -632,11 +680,44 @@ Line composePeriod (Context& ctx, int sectionStart, int bars, const ScaleMap& sm
         { 2, 0, 3, 1,  2, 4, 5, 0 },   // gentle, circling the third
     };
 
-    int shape;
+    // The phrase's contour: one of the classic shapes, or (more often) a new one drawn within
+    // the rules of a period - a start on a tonic-chord note, an open half cadence at bar 4,
+    // the opening restated at bar 5, the high point in bar 7, home at the end.
+    int contour[8];
 
-    if (leapDirection < 0)        shape = rng.chance (0.5) ? 2 : 4;
-    else if (energy >= 0.65)      shape = rng.chance (0.6) ? 3 : 1;
-    else                          shape = rng.pick (std::vector<int> { 0, 1, 2, 4 });
+    if (rng.chance (0.3))
+    {
+        int shape;
+
+        if (leapDirection < 0)        shape = rng.chance (0.5) ? 2 : 4;
+        else if (energy >= 0.65)      shape = rng.chance (0.6) ? 3 : 1;
+        else                          shape = rng.pick (std::vector<int> { 0, 1, 2, 4 });
+
+        for (int i = 0; i < 8; ++i)
+            contour[i] = shapes[shape][i];
+    }
+    else
+    {
+        static const std::vector<int> startsUp { 0, 0, 2, 4, 4 };
+        static const std::vector<int> startsDown { 4, 5, 7, 2 };
+        contour[0] = rng.pick (leapDirection < 0 ? startsDown : startsUp);
+        contour[1] = contour[0] + rng.pick (std::vector<int> { -2, -1, 1, 2, 3, 3 });
+        contour[2] = rng.range (1, 6);
+
+        if (contour[2] == contour[1])
+            contour[2] += contour[1] > 3 ? -2 : 2;
+
+        contour[3] = rng.pick (std::vector<int> { 1, 4, 3, 1 });
+        contour[4] = contour[0];
+        contour[5] = contour[1] + (rng.chance (0.4) ? 1 : 0);
+        const int highest = std::max ({ contour[0], contour[1], contour[2], contour[5] });
+        contour[6] = std::min (energy >= 0.65 ? 9 : 8, highest + rng.range (1, 3));
+        contour[7] = 0;
+    }
+
+    const bool learnedSteps = n == 7;
+    const bool minorScale = n == 7 && sm.intervals[2] == 3;
+    int lastStep = kNoIndex, lastStep2 = kNoIndex;
 
     // The phrase's home tonic sits low in the register, so the contour has room to rise.
     int base = n * (int) std::lround ((lo + (hi - lo) * 0.25) / (double) n);
@@ -663,7 +744,7 @@ Line composePeriod (Context& ctx, int sectionStart, int bars, const ScaleMap& sm
     {
         const int shapeBar = bars >= 8 ? b % 8 : 4 + (b % 4);
         const auto& ch = ctx.chordAt (sectionStart + b * tpb + 1);
-        int target = base + shapes[shape][shapeBar];
+        int target = base + contour[shapeBar];
 
         if (b == bars - 1 && endOnTonic)
             target = base;
@@ -697,7 +778,14 @@ Line composePeriod (Context& ctx, int sectionStart, int bars, const ScaleMap& sm
         else if (phraseEnd && bars > 1)
             rhythms[(size_t) b] = cadenceRhythm (m, finalBar && endOnTonic, ! finalBar, density, style, rng);
         else
-            rhythms[(size_t) b] = fillRhythm (m, 0, tpb, density, style, rng, b > 0);
+        {
+            // Mostly rhythms learned from the corpus; sometimes the hand-written cells.
+            if (rng.chance (0.75))
+                rhythms[(size_t) b] = learnedBarRhythm (m, density, style, ctx.families, b == 0 || b == half, rng);
+
+            if (rhythms[(size_t) b].empty())
+                rhythms[(size_t) b] = fillRhythm (m, 0, tpb, density, style, rng, b > 0);
+        }
 
         const auto& rhythm = rhythms[(size_t) b];
         const int lastK = lastSoundingIndex (rhythm);
@@ -796,6 +884,10 @@ Line composePeriod (Context& ctx, int sectionStart, int bars, const ScaleMap& sm
                     if (std::abs (sm.pitch (cand) - sm.pitch (prev)) == 6)
                         sc += 2.0;
 
+                    // How melodies in the corpus move after the last two intervals.
+                    if (learnedSteps)
+                        sc -= 0.3 * (learnedStepLogProb (ctx.families, minorScale, lastStep2, lastStep, cand - prev) - std::log (1.0 / 15.0));
+
                     sc += rng.uniform (0.0, 0.35);
 
                     if (sc < bestScore)
@@ -819,6 +911,8 @@ Line composePeriod (Context& ctx, int sectionStart, int bars, const ScaleMap& sm
             if (idx != prev)
                 prevPrev = prev;
 
+            lastStep2 = lastStep;
+            lastStep = idx - prev;
             prev = idx;
             firstNote = false;
         }
@@ -910,7 +1004,7 @@ void resolveLine (Line& line, int sectionStart, const Context& ctx, const ScaleM
             part.dur = std::max (1, change - from);
 
             const int off = from % m.ticksPerBar;
-            const bool strong = isStrongPosition (m, off, part.dur) || (from % m.beatTicks == 0 && part.dur >= m.beatTicks / 2)
+            const bool strong = isStrongPosition (m, off, part.dur) || from % m.beatTicks == 0
                              || (! firstPart && part.dur >= m.beatTicks / 2);
 
             if (strong && part.dur >= kStep * 2 && harsh (wrapPc (sm.pitch (part.idx)), ch))
@@ -1148,6 +1242,10 @@ struct Flavor
     bool drive = false, lyrical = false, pizzDrive = false, hits = false, dark = false, pastoral = false;
     std::string ostinato = "epic";
     double energy = 0.5;
+    // Per-cue texture choices (seeded), so two cues in the same style don't share every figure.
+    int drumVariant = 0;
+    bool pulseStrings = false;
+    std::string arpPattern;   // "" = the track's own
 };
 
 Flavor flavorOf (const StyleSpec& s, const Ensemble& e)
@@ -1654,8 +1752,10 @@ void percussionPart (Context& ctx, const CueSection& sec, const TrackSpec& t, in
     const bool snare = kind == Perc::Snare || kind == Perc::Kit;
 
     // 16th-step patterns (4/4); other meters use beat-based figures.
-    static const char* lowDrums  = "x..x..x.x..x..x.";
-    static const char* highDrums = "......x.......x.";
+    static const char* lowPatterns[]  = { "x..x..x.x..x..x.", "x...x.x.x...x.x.", "x.x...x.x.x...x.", "x..x...xx..x..x.", "x...x...x...x.x." };
+    static const char* highPatterns[] = { "......x.......x.", "....x.......x...", "..x...x...x...x.", "......x...x...x.", "....x.......x.x." };
+    const char* lowDrums = lowPatterns[f.drumVariant % 5];
+    const char* highDrums = highPatterns[(f.drumVariant * 3 + 1) % 5];
     const bool fourFour = m.beatsPerBar == 4 && ! m.compound;
 
     for (int bar = sec.startBar; bar < sec.startBar + sec.bars; ++bar)
@@ -1958,14 +2058,15 @@ void tuttiHit (Context& ctx, const CueSection& sec, const StyleSpec& s, const En
     if (pre <= 0)
         return;
 
-    // Swell: timpani roll into the hit.
+    // Swell: timpani roll on the bass of the chord that is sounding, then the hit on the new root.
     if (e.any (Inst::Timpani))
     {
         const int ti = e.first (Inst::Timpani);
         const auto& t = s.tracks[(size_t) ti];
         const int root = bassPitchFor (ch.bassRoot(), std::max (38, t.lowNote), std::min (57, t.highNote), -1);
+        const int rollPitch = bassPitchFor (ctx.chordAt (tick - 1).bassRoot(), std::max (38, t.lowNote), std::min (57, t.highNote), root);
         Notes n;
-        addRoll (n, root, pre, tick, s.tempo, 40.0, 112.0);
+        addRoll (n, rollPitch, pre, tick, s.tempo, 40.0, 112.0);
         RawNote h;
         h.start = tick;
         h.length = m.beatTicks;
@@ -2070,7 +2171,22 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
 
     Rng rng (seed ^ 0xC0E5EEDull);
     const Ensemble E = buildEnsemble (spec);
-    const Flavor F = flavorOf (spec, E);
+    Flavor F = flavorOf (spec, E);
+
+    {
+        Rng fr (seed ^ 0xF1A7ull);
+        const bool compound = spec.tsDen == 8;
+
+        if (F.drive && fr.chance (0.5))
+            F.ostinato = fr.pick (compound || spec.tempo >= 130 ? std::vector<std::string> { "epic", "pulse", "gallop" }
+                                                                : std::vector<std::string> { "epic", "pulse" });
+
+        F.drumVariant = fr.range (0, 4);
+        F.pulseStrings = F.drive && fr.chance (0.3);
+
+        if (fr.chance (0.4))
+            F.arpPattern = fr.pick (std::vector<std::string> { "up", "updown", "random", "down" });
+    }
     const int target = targetBarsFor (spec);
     auto sections = planForm (spec, target, loopable, spec.energy, rng);
 
@@ -2714,45 +2830,72 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
         std::vector<std::pair<int, int>> owners; // track, octave relation to the lead (in semitones, INT_MIN = own placement)
         int lead = -1;
 
+        // Weighted choice among the free instruments that suit the passage, so every cue
+        // (and every variation) hands the tune around differently.
+        auto choose = [&] (std::initializer_list<std::pair<Inst, double>> options, bool avoidPrimary) -> int
+        {
+            std::vector<std::pair<int, double>> cands;
+            double total = 0.0;
+
+            for (auto& o : options)
+            {
+                const int t = free (o.first);
+
+                if (t >= 0 && o.second > 0.0 && ! (avoidPrimary && t == E.primary))
+                {
+                    cands.push_back ({ t, o.second });
+                    total += o.second;
+                }
+            }
+
+            if (cands.empty())
+                return E.primary;
+
+            double r = secRng.uniform (0.0, total);
+
+            for (auto& c : cands)
+            {
+                r -= c.second;
+
+                if (r <= 0.0)
+                    return c.first;
+            }
+
+            return cands.back().first;
+        };
+
+        const double bright = spec.energy >= 0.6 ? 1.0 : 0.0;
+
         switch (sec.kind)
         {
             case Kind::Intro:
-                lead = free (Inst::Horn) >= 0 ? free (Inst::Horn) : (free (Inst::Vc) >= 0 ? free (Inst::Vc) : E.primary);
+                lead = choose ({ { Inst::Horn, 3.0 }, { Inst::Vc, 2.0 }, { Inst::Clarinet, 1.5 }, { Inst::Flute, 1.0 }, { Inst::Oboe, 1.0 },
+                                 { Inst::Soloist, 1.5 }, { Inst::Vla, 0.5 } }, false);
                 break;
             case Kind::Statement:
-            case Kind::Outro:
                 lead = E.primary;
                 break;
+            case Kind::Outro:
+                lead = secRng.chance (0.6) ? E.primary
+                                           : choose ({ { Inst::Vc, 1.0 }, { Inst::Horn, 1.0 }, { Inst::Oboe, 1.0 }, { Inst::Clarinet, 1.0 } }, false);
+                break;
             case Kind::Restatement:
-                lead = free (Inst::Vln1) >= 0 ? free (Inst::Vln1) : E.primary;
+                lead = choose ({ { Inst::Vln1, 4.0 }, { Inst::Horn, 1.5 }, { Inst::Flute, F.lyrical ? 1.0 : 0.3 },
+                                 { Inst::Trumpet, bright }, { Inst::Vc, 0.8 } }, true);
                 break;
             case Kind::Development:
-                lead = free (Inst::Vln1) >= 0 ? free (Inst::Vln1) : E.primary;
+                lead = choose ({ { Inst::Vln1, 3.0 }, { Inst::Horn, 2.0 }, { Inst::Flute, 1.0 }, { Inst::Clarinet, 1.0 }, { Inst::Vla, 0.5 } }, false);
                 break;
             case Kind::Contrast:
-            {
-                for (Inst pref : { Inst::Oboe, Inst::Clarinet, Inst::Vc, Inst::Flute, Inst::Horn, Inst::Soloist })
-                {
-                    const int t = free (pref);
-
-                    if (t >= 0 && t != E.primary)
-                    {
-                        lead = t;
-                        break;
-                    }
-                }
-
-                if (lead < 0)
-                    lead = E.primary;
-
+                lead = choose ({ { Inst::Oboe, 2.0 }, { Inst::Clarinet, 2.0 }, { Inst::Vc, 2.0 }, { Inst::Flute, 1.5 }, { Inst::Horn, 1.0 },
+                                 { Inst::Soloist, 1.5 }, { Inst::Vln1, 0.5 } }, true);
                 break;
-            }
             case Kind::Build:
-                lead = free (Inst::Horn) >= 0 ? free (Inst::Horn) : (free (Inst::Vla) >= 0 ? free (Inst::Vla) : E.primary);
+                lead = choose ({ { Inst::Horn, 2.0 }, { Inst::Vla, 1.0 }, { Inst::Vc, 1.0 }, { Inst::Trombone, 1.0 }, { Inst::Vln2, 0.5 } }, false);
                 break;
             case Kind::Climax:
             case Kind::Stinger:
-                lead = free (Inst::Vln1) >= 0 ? free (Inst::Vln1) : (free (Inst::Horn) >= 0 ? free (Inst::Horn) : E.primary);
+                lead = choose ({ { Inst::Vln1, 3.0 }, { Inst::Horn, 2.0 }, { Inst::Trumpet, 1.5 * bright } }, false);
                 break;
         }
 
@@ -2991,7 +3134,8 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
         {
             busy.insert (E.arpTrack);
             const auto& base = spec.tracks[(size_t) E.arpTrack];
-            auto ts = partSpec (spec, E.arpTrack, sec, Role::Arpeggio, base.pattern, std::min (0.85, base.density + (i - 0.4) * 0.5));
+            auto ts = partSpec (spec, E.arpTrack, sec, Role::Arpeggio, F.arpPattern.empty() ? base.pattern : F.arpPattern,
+                                std::min (0.85, base.density + (i - 0.4) * 0.5));
 
             if (ctx.hasBassTrack)
             {
@@ -3045,7 +3189,10 @@ Composition composeCue (const StyleSpec& specIn, uint64_t seed)
                 for (int t : strings)
                     busy.insert (t);
 
-                choirChords (ctx, sec, spec, strings, ChoirRhythm::Sustain, tremolo ? Articulation::Tremolo : Articulation::Sustain,
+                const bool pulse = F.pulseStrings && ! tremolo && (sec.kind == Kind::Development || sec.kind == Kind::Climax);
+
+                choirChords (ctx, sec, spec, strings, pulse ? ChoirRhythm::Pulse : ChoirRhythm::Sustain,
+                             tremolo ? Articulation::Tremolo : (pulse ? Articulation::Spiccato : Articulation::Sustain),
                              sec.kind == Kind::Intro ? 0.8 : 0.9, B);
             }
 

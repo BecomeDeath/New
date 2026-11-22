@@ -117,57 +117,84 @@ int main (int argc, char** argv)
 
     juce::AudioBuffer<float> buffer (2, blockSize);
     juce::MidiBuffer midi;
-    int noteOns = 0, noteOffs = 0;
-    float peak = 0.0f;
-    std::set<int> channels;
 
-    const int blocks = (int) (sampleRate * 20.0 / blockSize); // 20 seconds = 40 beats at 120 BPM
-
-    for (int b = 0; b < blocks; ++b)
+    auto param = [&] (const char* name) -> juce::AudioProcessorParameter*
     {
-        playHead.ppq = (double) b * blockSize / sampleRate * (playHead.bpm / 60.0);
-        midi.clear();
-        buffer.clear();
-        plugin->processBlock (buffer, midi);
+        for (auto* prm : plugin->getParameters())
+            if (prm->getName (64) == name)
+                return prm;
 
-        for (const auto meta : midi)
+        return nullptr;
+    };
+
+    struct Run { int ons = 0, offs = 0; std::set<int> channels; float peak = 0.0f; };
+
+    auto play = [&] (double seconds, double fromPpq, bool bypassed)
+    {
+        Run r;
+        const int blocks = (int) (sampleRate * seconds / blockSize);
+
+        for (int b = 0; b < blocks; ++b)
         {
-            const auto m = meta.getMessage();
+            playHead.ppq = fromPpq + (double) b * blockSize / sampleRate * (playHead.bpm / 60.0);
+            midi.clear();
+            buffer.clear();
 
-            if (m.isNoteOn())
+            if (bypassed)
+                plugin->processBlockBypassed (buffer, midi);
+            else
+                plugin->processBlock (buffer, midi);
+
+            for (const auto meta : midi)
             {
-                ++noteOns;
-                channels.insert (m.getChannel());
+                const auto m = meta.getMessage();
+
+                if (m.isNoteOn())       { ++r.ons; r.channels.insert (m.getChannel()); }
+                else if (m.isNoteOff()) { ++r.offs; }
             }
-            else if (m.isNoteOff())
-            {
-                ++noteOffs;
-            }
+
+            r.peak = juce::jmax (r.peak, buffer.getMagnitude (0, 0, blockSize));
         }
 
-        peak = juce::jmax (peak, buffer.getMagnitude (0, 0, blockSize));
-    }
+        return r;
+    };
 
-    std::printf ("  %d note-ons, %d note-offs on %d channels, preview peak %.3f\n", noteOns, noteOffs, (int) channels.size(), peak);
-    CHECK (noteOns > 100);
-    CHECK (noteOffs > 100);
-    CHECK (channels.size() >= 5);
-    CHECK (peak > 0.01f && peak <= 1.0f);
+    auto* hostMidi = param ("Send MIDI with Host");
+    CHECK (hostMidi != nullptr && param ("Preview Sound") != nullptr && param ("Loop") != nullptr);
+
+    // Defaults: while the DAW plays, PromptMIDI makes no sound and sends nothing, so a dragged-out
+    // clip on another track is the only thing heard.
+    const auto quiet = play (10.0, 0.0, false);
+    std::printf ("  host playing, defaults: %d note-ons, peak %.4f\n", quiet.ons, quiet.peak);
+    CHECK (quiet.ons == 0);
+    CHECK (quiet.peak < 1.0e-9f);
+
+    // Opt in to MIDI with the host: notes go out on their channels, still no audio.
+    if (hostMidi != nullptr)
+        hostMidi->setValueNotifyingHost (1.0f);
+
+    const auto sent = play (20.0, 0.0, false);
+    std::printf ("  send MIDI with host: %d note-ons, %d note-offs on %d channels, audio peak %.4f\n",
+                 sent.ons, sent.offs, (int) sent.channels.size(), sent.peak);
+    CHECK (sent.ons > 100);
+    CHECK (sent.offs > 100);
+    CHECK (sent.channels.size() >= 5);
+    CHECK (sent.peak < 1.0e-9f);
+
+    // Bypassing mid-piece ends every sounding note and stays silent.
+    const auto bypass = play (2.0, 40.0, true);
+    std::printf ("  bypassed: %d note-ons, %d note-offs, peak %.4f\n", bypass.ons, bypass.offs, bypass.peak);
+    CHECK (bypass.ons == 0);
+    CHECK (bypass.offs > 0);
+    CHECK (bypass.peak < 1.0e-9f);
 
     // Stopping the transport must silence everything.
+    play (1.0, 0.0, false);
     playHead.playing = false;
-    midi.clear();
-    plugin->processBlock (buffer, midi);
-    int offsAfterStop = 0, onsAfterStop = 0;
-
-    for (const auto meta : midi)
-    {
-        offsAfterStop += meta.getMessage().isNoteOff() ? 1 : 0;
-        onsAfterStop += meta.getMessage().isNoteOn() ? 1 : 0;
-    }
-
-    CHECK (onsAfterStop == 0);
-    std::printf ("  stop sent %d note-offs\n", offsAfterStop);
+    const auto stopped = play (0.5, 0.0, false);
+    CHECK (stopped.ons == 0 && stopped.peak < 1.0e-9f);
+    std::printf ("  stop sent %d note-offs\n", stopped.offs);
+    playHead.playing = true;
 
     std::printf ("state save\n");
     juce::MemoryBlock saved;

@@ -20,6 +20,8 @@ set (PROMPTMIDI_JUCE_DIR "" CACHE PATH "Use a local JUCE checkout instead of dow
 add_library (promptmidi_core STATIC
     Source/Core/Composer.cpp
     Source/Core/CueEngine.cpp
+    Source/Core/Learned.cpp
+    Source/Core/LearnedData.cpp
     Source/Core/MidiFileWriter.cpp
     Source/Core/MusicTheory.cpp
     Source/Core/PromptInterpreter.cpp

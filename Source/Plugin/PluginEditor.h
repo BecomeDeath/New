@@ -140,7 +140,7 @@ private:
     PianoRoll pianoRoll;
 
     juce::TextButton playButton { "Play" };
-    juce::ToggleButton loopToggle { "Loop" }, syncToggle { "Follow host" }, soundToggle { "Preview sound" }, midiOutToggle { "MIDI out" };
+    juce::ToggleButton loopToggle { "Loop" }, syncToggle { "Send MIDI with host" }, soundToggle { "Preview sound" };
     juce::Slider volumeSlider;
     DragAllArea dragArea;
     juce::TextButton exportButton { "Export .mid" };
@@ -150,7 +150,7 @@ private:
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<ButtonAttachment> loopAttachment, syncAttachment, soundAttachment, midiOutAttachment;
+    std::unique_ptr<ButtonAttachment> loopAttachment, syncAttachment, soundAttachment;
     std::unique_ptr<SliderAttachment> volumeAttachment;
 
     int animationFrame = 0;

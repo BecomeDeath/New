@@ -41,6 +41,7 @@ void MidiDragSource::mouseDrag (const juce::MouseEvent& e)
         return;
 
     dragging = true;
+    processor.setPreviewPlaying (false); // the MIDI goes to the DAW; the preview stays here
     const auto file = processor.writeMidiToTempFile (track);
 
     juce::Component::SafePointer<MidiDragSource> safe (this);
@@ -581,11 +582,11 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
 
     loopToggle.setTooltip ("Loop during playback. Cues with loop points play the intro once, then repeat the loop region "
                            "(green in the piano roll), the way a game engine plays them");
-    syncToggle.setTooltip ("Play in time with the host's transport, starting from bar 1 of the project");
+    syncToggle.setTooltip ("Off (default): PromptMIDI stays silent while your DAW plays. On: it sends the piece as MIDI out "
+                           "in time with the host transport, to drive instruments on other tracks (never audio)");
     soundToggle.setTooltip ("Hear the result through PromptMIDI's built-in sketch synth");
-    midiOutToggle.setTooltip ("Send the notes out as MIDI, to drive instruments in your DAW");
 
-    for (auto* t : { &loopToggle, &syncToggle, &soundToggle, &midiOutToggle })
+    for (auto* t : { &loopToggle, &syncToggle, &soundToggle })
         addAndMakeVisible (t);
 
     volumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -600,9 +601,8 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     addAndMakeVisible (exportButton);
 
     loopAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "loop", loopToggle);
-    syncAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "syncHost", syncToggle);
+    syncAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "hostMidiOut", syncToggle);
     soundAttachment   = std::make_unique<ButtonAttachment> (processor.parameters, "previewSound", soundToggle);
-    midiOutAttachment = std::make_unique<ButtonAttachment> (processor.parameters, "midiOut", midiOutToggle);
     volumeAttachment  = std::make_unique<SliderAttachment> (processor.parameters, "previewVolume", volumeSlider);
 
     processor.addChangeListener (this);
@@ -617,6 +617,7 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
 
 PromptMidiEditor::~PromptMidiEditor()
 {
+    processor.setPreviewPlaying (false); // the preview never keeps playing behind a closed window
     processor.removeChangeListener (this);
     setLookAndFeel (nullptr);
 }
@@ -734,11 +735,10 @@ void PromptMidiEditor::resized()
     playButton.setBounds (footer.removeFromLeft (84));
     footer.removeFromLeft (12);
     loopToggle.setBounds (footer.removeFromLeft (64));
-    syncToggle.setBounds (footer.removeFromLeft (104));
+    syncToggle.setBounds (footer.removeFromLeft (160));
     soundToggle.setBounds (footer.removeFromLeft (118));
     volumeSlider.setBounds (footer.removeFromLeft (90).reduced (0, 10));
     footer.removeFromLeft (10);
-    midiOutToggle.setBounds (footer.removeFromLeft (86));
 
     exportButton.setBounds (footer.removeFromRight (112));
     footer.removeFromRight (12);

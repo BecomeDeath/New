@@ -4,9 +4,11 @@
 // orchestral cue engine (CueEngine.cpp). Not part of the public API.
 
 #include "Composition.h"
+#include "LearnedData.h"
 #include "Rng.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <string>
@@ -73,13 +75,23 @@ using Notes = std::vector<RawNote>;
 using Controls = std::vector<ControlChange>;
 
 //==============================================================================
+/** How much each learned style family (see LearnedData.h) should shape a piece. */
+struct FamilyMix
+{
+    std::array<double, learned::NumFamilies> weight {};
+};
+
+/** The family mix for a spec, from its style, mood, mode and energy (Learned.cpp). */
+FamilyMix familiesFor (const StyleSpec&);
+
 struct Context
 {
-    explicit Context (const StyleSpec& s) : spec (s), meter (makeMeter (s.tsNum, s.tsDen)), mi (modeInfo (s.mode)) {}
+    explicit Context (const StyleSpec& s) : spec (s), meter (makeMeter (s.tsNum, s.tsDen)), mi (modeInfo (s.mode)), families (familiesFor (s)) {}
 
     const StyleSpec& spec;
     Meter meter;
     const ModeInfo& mi;
+    FamilyMix families;
     int bars = 0;
     int totalTicks = 0;
     int tonicPitch = 60;

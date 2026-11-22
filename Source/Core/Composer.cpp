@@ -1,5 +1,6 @@
 #include "Composer.h"
 #include "ComposerDetail.h"
+#include "Learned.h"
 #include "CueEngine.h"
 #include "QualityCheck.h"
 #include "Rng.h"
@@ -54,24 +55,37 @@ bool isPianoLike (int program) { return program <= 7; }
 bool isGuitarLike (int program) { return program >= 24 && program <= 31; }
 
 //==============================================================================
-char formLetter (int index, int count)
+char formLetter (int index, int count, int layout)
 {
     if (count <= 2)
         return 'A';
 
     if (count == 3)
-        return index == 1 ? 'B' : 'A';
+    {
+        static const char three[][3] = { { 'A', 'B', 'A' }, { 'A', 'A', 'B' }, { 'A', 'B', 'B' } };
+        return three[layout % 3][index];
+    }
 
-    static const char form[] = { 'A', 'A', 'B', 'A' };
-    return index == count - 1 ? 'A' : form[index % 4];
+    // A A B A, A B A B, A A B B, A B A A, A B B A: chosen per piece.
+    static const char four[][4] = { { 'A', 'A', 'B', 'A' }, { 'A', 'B', 'A', 'B' }, { 'A', 'A', 'B', 'B' },
+                                    { 'A', 'B', 'A', 'A' }, { 'A', 'B', 'B', 'A' } };
+    const char* form = four[layout % 5];
+    return index == count - 1 && count > 4 ? 'A' : form[index % 4];
 }
 
-/** Lays out the form: an intro until the first melody enters, then 4-bar phrases
-    in an A A B A shape (A B A for three phrases), with an optional key lift for the
-    final statement of the theme.
+/** Lays out the form: an intro until the first melody enters, then 4-bar phrases in one of
+    several song shapes (A A B A, A B A B, A A B B...), with an optional key lift for the final
+    statement of the theme.
 */
-void planSections (Context& ctx)
+void planSections (Context& ctx, Rng& rng)
 {
+    static const double layoutWeights[] = { 0.4, 0.2, 0.15, 0.15, 0.1 };
+    double r = rng.uniform();
+    int layout = 0;
+
+    for (; layout < 4 && r > layoutWeights[layout]; ++layout)
+        r -= layoutWeights[layout];
+
     const auto& s = ctx.spec;
     int entry = ctx.bars;
 
@@ -93,7 +107,7 @@ void planSections (Context& ctx)
     for (int i = 0; i < count; ++i)
     {
         const int start = entry + i * phraseBars;
-        ctx.sections.push_back ({ start, std::min (phraseBars, ctx.bars - start), formLetter (i, count), s.keyRoot });
+        ctx.sections.push_back ({ start, std::min (phraseBars, ctx.bars - start), formLetter (i, count, layout), s.keyRoot });
     }
 
     int statementsOfA = 0;
@@ -867,7 +881,14 @@ Notes generateMelody (Context& ctx, const TrackSpec& t, Rng& rng, bool useTheme)
                 else if (b == 2 && ph.length == 4 && rng.chance (0.6))
                     r = plan.rhythms[0];
                 else
-                    r = fillRhythm (m, 0, m.ticksPerBar, t.density, style, rng, b > 0);
+                {
+                    // Most bars take a rhythm learned from the corpus; the rest keep the hand-written cells.
+                    if (rng.chance (0.7))
+                        r = learnedBarRhythm (m, t.density, style, ctx.families, b == 0, rng);
+
+                    if (r.empty())
+                        r = fillRhythm (m, 0, m.ticksPerBar, t.density, style, rng, b > 0);
+                }
 
                 plan.rhythms.push_back (r);
                 plan.indices.emplace_back (r.size(), kNoIndex);
@@ -1166,6 +1187,17 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
     static const std::vector<std::vector<int>> stabRhythms = { { 0, 3, 6, 10, 12 }, { 0, 6, 8, 14 }, { 3, 6, 10, 13 }, { 0, 3, 8, 11, 14 } };
     const auto& stab = stabRhythms[(size_t) rng.range (0, (int) stabRhythms.size() - 1)];
 
+    // Block chords: half the time a comping groove instead of even hits ({position, length} in 16ths).
+    static const std::vector<std::vector<int>> blockGrooves = {
+        { 0, 6, 6, 6, 12, 4 },          // 3-3-2
+        { 0, 6, 6, 10 },                // Charleston
+        { 0, 10, 10, 6 },               // anticipated third beat
+        { 0, 4, 4, 4, 8, 4, 12, 4 },    // four on the floor
+        { 0, 8, 10, 2, 12, 4 },         // half, then a push
+        { 0, 3, 6, 4, 12, 4 } };        // short-long
+    const bool groove = rng.chance (0.5) && t.density >= 0.35;
+    const auto* blockGroove = groove ? &blockGrooves[(size_t) rng.range (0, (int) blockGrooves.size() - 1)] : nullptr;
+
     std::vector<int> prevVoicing;
 
     // Sustained harmony sits above the bass line; close chords below C3 turn to mud.
@@ -1220,7 +1252,16 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
         const int beat = m.beatTicks;
         const int sub = m.subdivTicks;
 
-        if (pattern == "block")
+        if (pattern == "block" && blockGroove != nullptr && len == m.ticksPerBar && m.beatsPerBar == 4 && ! m.compound)
+        {
+            // This piece's comping rhythm (16th positions and lengths), the same every bar.
+            for (size_t k = 0; k < blockGroove->size(); k += 2)
+            {
+                const int x = s + (*blockGroove)[k] * kStep;
+                addHit (out, voicing, x, (int) ((*blockGroove)[k + 1] * kStep * 0.92), baseVel * (k == 0 ? 1.0 : 0.86), roll);
+            }
+        }
+        else if (pattern == "block")
         {
             int step = t.density < 0.3 ? len : (t.density < 0.6 ? beat * 2 : beat);
 
@@ -2459,7 +2500,10 @@ Composition composeOnce (const StyleSpec& specIn, uint64_t seed)
     for (auto& t : spec.tracks)
         ctx.hasBassTrack = ctx.hasBassTrack || t.role == Role::Bass;
 
-    planSections (ctx);
+    {
+        Rng formRng (seed ^ 0x50F0E1ull);
+        planSections (ctx, formRng);
+    }
     Rng chordRng (seed ^ 0xC0FFEEull);
     buildChords (ctx, chordRng);
 
@@ -2475,6 +2519,24 @@ Composition composeOnce (const StyleSpec& specIn, uint64_t seed)
     comp.mode = spec.mode;
     comp.progression = spec.progression;
     comp.endKeyRoot = ctx.sections.empty() ? spec.keyRoot : ctx.sections.back().keyRoot;
+
+    // Section markers and the form, as for cues.
+    for (size_t i = 0; i < ctx.sections.size(); ++i)
+    {
+        const auto& sec = ctx.sections[i];
+        const std::string label = sec.type == 'I' ? std::string ("Intro") : std::string (1, sec.type);
+
+        if (i > 0 && ctx.sections[i - 1].type == sec.type && sec.type != 'I')
+            continue; // A A reads as one A section on a timeline
+
+        comp.markers.push_back ({ sec.startBar * ctx.meter.ticksPerBar, label });
+
+        if (! comp.form.empty())
+            comp.form += " \xE2\x80\x93 ";
+
+        comp.form += label;
+    }
+
     comp.tracks.resize (spec.tracks.size());
 
     const bool flats = keyPrefersFlats (spec.keyRoot, spec.mode);

@@ -30,10 +30,12 @@ public:
 
     //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
+    using AudioProcessor::processBlockBypassed;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override                          { return true; }
@@ -98,7 +100,8 @@ public:
     bool writeMidiFile (const juce::File&, int trackIndex = -1) const;
     juce::File writeMidiToTempFile (int trackIndex = -1) const;
 
-    void setPreviewPlaying (bool shouldPlay);
+    /** The in-plugin preview (heard only inside PromptMIDI, never with the host). */
+    void setPreviewPlaying (bool shouldPlay, double fromTick = 0.0);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
     double getPlayheadTick() const                           { return playheadTick.load(); }
 
@@ -145,6 +148,7 @@ private:
     juce::String lastPrompt;
     Engine lastEngine = Engine::Offline;
     uint64_t interpretSeed = 1;
+    uint64_t variationSeed = 0;   // 0 = the plan as interpreted; otherwise the last Variation
     Status status = Status::Idle;
     juce::String statusMessage;
     std::unique_ptr<Claude::Job> claudeJob;
@@ -160,6 +164,7 @@ private:
     std::atomic<uint64_t> mutedMask { 0 };
     std::atomic<bool> previewPlaying { false };
     std::atomic<bool> previewRestart { false };
+    std::atomic<double> previewStartTick { 0.0 };
     std::atomic<double> playheadTick { -1.0 };
 
     // Audio thread only
@@ -168,14 +173,17 @@ private:
     double expectedTick = -1.0;
     bool wasPlaying = false;
     std::array<std::array<uint8_t, 128>, 16> activeNotes {};
-    juce::MidiBuffer generatedMidi;
+    juce::MidiBuffer generatedMidi, panicMidi;
     PreviewSynth synth;
     bool synthHadSound = false;
+    bool stopPreviewSound = false;
+    int silentBlocks = 0;
+    enum class Destination { None, Preview, MidiOut };
+    Destination lastDestination = Destination::None;
 
     std::atomic<float>* previewSoundParam = nullptr;
     std::atomic<float>* previewVolumeParam = nullptr;
-    std::atomic<float>* midiOutParam = nullptr;
-    std::atomic<float>* syncHostParam = nullptr;
+    std::atomic<float>* hostMidiOutParam = nullptr;
     std::atomic<float>* loopParam = nullptr;
 
     std::shared_ptr<bool> aliveToken = std::make_shared<bool> (true);

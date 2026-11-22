@@ -18,7 +18,8 @@
 static void usage()
 {
     std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json]\n"
-                 "                     [--length sketch|cue|full|extended] [--articulations none|keyswitch|uacc] [--list-styles]\n";
+                 "                     [--length sketch|cue|full|extended] [--articulations none|keyswitch|uacc]\n"
+                 "                     [--variation N] [--list-styles]\n";
 }
 
 static std::string jsonEscape (const std::string& s)
@@ -94,7 +95,7 @@ static void writeJson (const std::string& path, const pm::StyleSpec& spec, const
 int main (int argc, char** argv)
 {
     std::string prompt, outFile, jsonFile, articulations = "none";
-    uint64_t seed = 1;
+    uint64_t seed = 1, variation = 0;
     bool printNotes = false;
     pm::PromptOverrides overrides;
 
@@ -104,6 +105,7 @@ int main (int argc, char** argv)
 
         if ((a == "-o" || a == "--output") && i + 1 < argc)   outFile = argv[++i];
         else if (a == "--seed" && i + 1 < argc)               seed = std::strtoull (argv[++i], nullptr, 10);
+        else if (a == "--variation" && i + 1 < argc)          variation = std::strtoull (argv[++i], nullptr, 10);
         else if (a == "--notes")                              printNotes = true;
         else if (a == "--json" && i + 1 < argc)               jsonFile = argv[++i];
         else if (a == "--length" && i + 1 < argc)             overrides.length = argv[++i];
@@ -125,8 +127,13 @@ int main (int argc, char** argv)
         return 1;
     }
 
-    const auto spec = pm::interpretPrompt (prompt, seed, overrides);
-    const auto comp = pm::compose (spec, seed);
+    auto spec = pm::interpretPrompt (prompt, seed, overrides);
+
+    if (variation > 0)
+        spec = pm::varySpec (spec, seed * 1000003ull + variation);
+
+    // --variation N: the same plan, composed again with another seed (the plug-in's Variation button).
+    const auto comp = pm::compose (spec, variation > 0 ? seed * 1000003ull + variation : seed);
 
     std::cout << "Title:   " << spec.title << "\n"
               << "Summary: " << comp.summary() << "\n";
