@@ -19,9 +19,11 @@ set (PROMPTMIDI_JUCE_DIR "" CACHE PATH "Use a local JUCE checkout instead of dow
 # Engine: plain C++17, no JUCE, shared by the plug-in, the CLI and the tests.
 add_library (promptmidi_core STATIC
     Source/Core/Composer.cpp
+    Source/Core/CueEngine.cpp
     Source/Core/MidiFileWriter.cpp
     Source/Core/MusicTheory.cpp
     Source/Core/PromptInterpreter.cpp
+    Source/Core/QualityCheck.cpp
     Source/Core/StyleSpec.cpp)
 
 target_include_directories (promptmidi_core PUBLIC Source/Core)

@@ -69,6 +69,7 @@ struct TrackSpec
     int velocity = 90;        // base loudness 1-127
     int entryBar = 0;         // bar (0-based) where the track comes in
     std::string pattern = "auto";
+    int endBar = -1;          // bar where the part stops (exclusive); -1 = plays to the end
 };
 
 /** A complete, engine-independent description of the piece to compose.
@@ -94,7 +95,9 @@ struct StyleSpec
     double complexity = 0.3;        // chord colour: 7ths, 9ths
     double humanize = 0.5;
     Dynamics dynamics = Dynamics::Arc;
-    bool resolveEnding = true;      // false = seamless loop
+    bool resolveEnding = true;      // false = seamless loop (cues get loop markers and an end stinger)
+    bool orchestral = false;        // compose as a full orchestral cue (form, development, orchestration)
+    std::string length = "auto";    // sketch | cue | full | extended | bars (use `bars` as given) | auto
     std::vector<ThemeNote> theme;   // optional main theme for the melody
     std::vector<TrackSpec> tracks;
 

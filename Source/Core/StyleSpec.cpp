@@ -256,6 +256,11 @@ void normalizeSpec (StyleSpec& s)
 
     s.finalLift = clampValue (s.finalLift, 0, 5);
 
+    static const char* lengths[] = { "auto", "sketch", "cue", "full", "extended", "bars" };
+
+    if (std::find_if (std::begin (lengths), std::end (lengths), [&] (const char* l) { return s.length == l; }) == std::end (lengths))
+        s.length = "auto";
+
     if (s.progression.empty())
     {
         const bool minorish = modeInfo (s.mode).relativeMajorOffset != 0;
@@ -301,8 +306,8 @@ void normalizeSpec (StyleSpec& s)
         n.beats = clampValue (n.beats, 0.125, 8.0);
     }
 
-    if (s.tracks.size() > 16)
-        s.tracks.resize (16);
+    if (s.tracks.size() > 24)
+        s.tracks.resize (24);
 
     if (s.tracks.empty())
     {

@@ -53,9 +53,10 @@ static void writeJson (const std::string& path, const pm::StyleSpec& spec, const
         pm::Chord ch;
         pm::parseChordSymbol (c.chords[i].name, 0, pm::Mode::Major, ch);
         f << (i ? "," : "") << "{\"start\":" << c.chords[i].start << ",\"end\":" << c.chords[i].end << ",\"name\":\""
-          << jsonEscape (c.chords[i].name) << "\",\"roman\":\"" << jsonEscape (c.chords[i].roman) << "\",\"pcs\":[";
+          << jsonEscape (c.chords[i].name) << "\",\"roman\":\"" << jsonEscape (c.chords[i].roman) << "\",\"bassPc\":"
+          << c.chords[i].bassPc << ",\"pcs\":[";
 
-        auto pcs = ch.pitchClasses();
+        auto pcs = c.chords[i].pcs.empty() ? ch.pitchClasses() : c.chords[i].pcs;
 
         for (size_t k = 0; k < pcs.size(); ++k)
             f << (k ? "," : "") << pcs[k];
@@ -63,7 +64,12 @@ static void writeJson (const std::string& path, const pm::StyleSpec& spec, const
         f << "]}";
     }
 
-    f << "],\"tracks\":[";
+    f << "],\"markers\":[";
+
+    for (size_t i = 0; i < c.markers.size(); ++i)
+        f << (i ? "," : "") << "[" << c.markers[i].tick << ",\"" << jsonEscape (c.markers[i].text) << "\"]";
+
+    f << "],\"loop\":[" << c.loopStart << "," << c.loopEnd << "],\"quality\":" << c.quality.score << ",\"tracks\":[";
 
     for (size_t t = 0; t < c.tracks.size(); ++t)
     {
@@ -75,7 +81,7 @@ static void writeJson (const std::string& path, const pm::StyleSpec& spec, const
         for (size_t n = 0; n < tr.notes.size(); ++n)
         {
             const auto& no = tr.notes[n];
-            f << (n ? "," : "") << "[" << no.start << "," << no.length << "," << no.pitch << "," << no.velocity << "]";
+            f << (n ? "," : "") << "[" << no.start << "," << no.length << "," << no.pitch << "," << no.velocity << "," << (int) no.articulation << "]";
         }
 
         f << "]}";
@@ -123,6 +129,15 @@ int main (int argc, char** argv)
 
     for (auto& line : spec.interpretation)
         std::cout << "  - " << line << "\n";
+
+    if (! comp.form.empty())
+        std::cout << "Form:    " << comp.form << "\n";
+
+    std::printf ("Length:  %d bars, %d:%02d\n", comp.bars, (int) comp.seconds() / 60, (int) comp.seconds() % 60);
+    std::printf ("Quality: %.1f / 10 (best of %d takes)\n", comp.quality.score, comp.quality.candidates);
+
+    for (auto& q : comp.quality.notesText)
+        std::cout << "  - " << q << "\n";
 
     std::cout << "Tracks:\n";
 

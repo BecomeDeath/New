@@ -16,6 +16,7 @@ struct PromptOverrides
     int mode = -1;     // a Mode value, -1 = from prompt / style
     int tempo = 0;     // BPM, 0 = from prompt / style
     int bars = 0;      // 0 = from prompt / style
+    std::string length; // "" = from prompt / style; else sketch | cue | full | extended
 };
 
 /** Offline prompt interpreter.

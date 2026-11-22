@@ -1,4 +1,7 @@
 #include "Composer.h"
+#include "ComposerDetail.h"
+#include "CueEngine.h"
+#include "QualityCheck.h"
 #include "Rng.h"
 
 #include <algorithm>
@@ -10,26 +13,8 @@
 namespace pm
 {
 
-namespace
+namespace detail
 {
-constexpr double kPi = 3.14159265358979323846;
-constexpr int kStep = kPpq / 4; // a 16th note
-constexpr int kNoIndex = INT_MIN;
-
-template <typename T>
-T clampv (T v, T lo, T hi) { return std::max (lo, std::min (hi, v)); }
-
-//==============================================================================
-struct Meter
-{
-    int num = 4, den = 4;
-    int ticksPerBar = 4 * kPpq;
-    int beatsPerBar = 4;
-    int beatTicks = kPpq;      // the felt beat (a dotted quarter in 6/8)
-    int subdivTicks = kPpq / 2;
-    int stepsPerBar = 16;      // 16th-note steps per bar
-    bool compound = false;
-};
 
 Meter makeMeter (int num, int den)
 {
@@ -58,36 +43,6 @@ Meter makeMeter (int num, int den)
     return m;
 }
 
-struct ChordEvent
-{
-    int start = 0, end = 0;
-    Chord chord;
-    std::vector<int> pcs;
-    std::string roman;
-    int keyRoot = 0;
-};
-
-/** A stretch of the form: 'I' intro (before the melody), 'A' main theme, 'B' contrast. */
-struct Section
-{
-    int startBar = 0;
-    int bars = 0;
-    char type = 'A';
-    int keyRoot = 0;
-};
-
-struct RawNote
-{
-    int start = 0;
-    int length = 0;
-    int pitch = 60;
-    double velocity = 90.0;
-    int micro = 0; // strum / roll offset, applied after swing and humanisation
-};
-
-using Notes = std::vector<RawNote>;
-using Controls = std::vector<ControlChange>;
-
 /** Instruments whose notes decay by themselves, so they can be allowed to ring. */
 bool isRinging (int program)
 {
@@ -97,93 +52,6 @@ bool isRinging (int program)
 
 bool isPianoLike (int program) { return program <= 7; }
 bool isGuitarLike (int program) { return program >= 24 && program <= 31; }
-
-//==============================================================================
-struct Context
-{
-    explicit Context (const StyleSpec& s) : spec (s), meter (makeMeter (s.tsNum, s.tsDen)), mi (modeInfo (s.mode)) {}
-
-    const StyleSpec& spec;
-    Meter meter;
-    const ModeInfo& mi;
-    int bars = 0;
-    int totalTicks = 0;
-    int tonicPitch = 60;
-    std::vector<ChordEvent> chords;
-    std::vector<Section> sections;
-    Notes leadMelody;
-    bool hasBassTrack = false;
-
-    const Section& sectionAt (int tick) const
-    {
-        const int bar = tick / meter.ticksPerBar;
-
-        for (auto& sec : sections)
-            if (bar >= sec.startBar && bar < sec.startBar + sec.bars)
-                return sec;
-
-        return sections.back();
-    }
-
-    /** The melody scale in the key of the section containing `tick`. */
-
-    int chordIndexAt (int tick) const
-    {
-        auto it = std::upper_bound (chords.begin(), chords.end(), tick,
-                                    [] (int t, const ChordEvent& c) { return t < c.start; });
-        return it == chords.begin() ? 0 : (int) (it - chords.begin()) - 1;
-    }
-
-    const ChordEvent& chordAt (int tick) const { return chords[(size_t) chordIndexAt (tick)]; }
-
-    const ChordEvent* chordAfter (const ChordEvent& c) const
-    {
-        const auto idx = (size_t) (&c - chords.data()) + 1;
-        return idx < chords.size() ? &chords[idx] : nullptr;
-    }
-
-    double energyAt (int tick) const
-    {
-        const double t = totalTicks > 0 ? clampv ((double) tick / totalTicks, 0.0, 1.0) : 0.0;
-        double shape = 1.0;
-
-        switch (spec.dynamics)
-        {
-            case Dynamics::Flat:  shape = 1.0; break;
-            case Dynamics::Build: shape = 0.78 + 0.34 * t; break;
-            case Dynamics::Arc:   shape = 0.84 + 0.26 * std::sin (kPi * t); break;
-            case Dynamics::Fade:  shape = 1.06 - 0.36 * t; break;
-        }
-
-        return shape * (0.85 + 0.3 * spec.energy);
-    }
-
-    bool hasFinalBar() const     { return spec.resolveEnding && bars > 1; }
-    int finalBarStart() const    { return (bars - 1) * meter.ticksPerBar; }
-    bool inFinalBar (int tick) const { return hasFinalBar() && tick >= finalBarStart(); }
-
-    ScaleMap melodyScale() const  { return { mi.melodyScale, tonicPitch }; }
-    ScaleMap harmonyScale() const { return { mi.harmonyScale, tonicPitch }; }
-
-    /** Chord events overlapping [from, to), clipped. */
-    std::vector<ChordEvent> chordsBetween (int from, int to) const
-    {
-        std::vector<ChordEvent> out;
-
-        for (auto& c : chords)
-        {
-            if (c.end <= from || c.start >= to)
-                continue;
-
-            auto clipped = c;
-            clipped.start = std::max (c.start, from);
-            clipped.end = std::min (c.end, to);
-            out.push_back (clipped);
-        }
-
-        return out;
-    }
-};
 
 //==============================================================================
 char formLetter (int index, int count)
@@ -540,14 +408,6 @@ int fifthAbove (int pitch, int high) { return pitch + 7 <= high ? pitch + 7 : pi
 //==============================================================================
 // Melody
 
-enum class MelStyle { Lyrical = 0, Rhythmic = 1, Sparse = 2 };
-
-struct RNote
-{
-    int offset = 0;   // relative to bar start
-    int dur = 0;
-    bool rest = false;
-};
 
 struct Cell
 {
@@ -737,7 +597,7 @@ bool indexIsChordTone (const ScaleMap& sm, int idx, const ChordEvent& ch)
                      signature leap the theme should make here (e.g. +4 = a rising fifth).
 */
 int chooseMelodyIndex (int prev, int prevDelta, int target, int lo, int hi, const ChordEvent& ch,
-                       bool strong, bool allowRepeat, Rng& rng, const ScaleMap& sm, int leapBias = 0, bool onBeat = false)
+                       bool strong, bool allowRepeat, Rng& rng, const ScaleMap& sm, int leapBias, bool onBeat)
 {
     int best = clampv (prev, lo, hi);
     double bestScore = 1e9;
@@ -784,7 +644,6 @@ int chooseMelodyIndex (int prev, int prevDelta, int target, int lo, int hi, cons
     return best;
 }
 
-enum class CadencePref { Tonic, Root, Open };
 
 int cadenceIndex (const ScaleMap& sm, int prev, int lo, int hi, const ChordEvent& ch, CadencePref pref, int tonicPc)
 {
@@ -1132,12 +991,13 @@ int melodyPitchAt (const Notes& melody, int tick)
 Notes doubleMelody (const Context& ctx, const TrackSpec& t)
 {
     Notes out;
-    const int from = t.entryBar * ctx.meter.ticksPerBar;
+    const int from = ctx.partStart (t);
+    const int to = ctx.partEnd (t);
     double sum = 0.0;
     int count = 0;
 
     for (auto& n : ctx.leadMelody)
-        if (n.start >= from)
+        if (n.start >= from && n.start < to)
         {
             sum += n.pitch;
             ++count;
@@ -1151,7 +1011,7 @@ Notes doubleMelody (const Context& ctx, const TrackSpec& t)
 
     for (auto n : ctx.leadMelody)
     {
-        if (n.start < from)
+        if (n.start < from || n.start >= to)
             continue;
 
         n.pitch += shift;
@@ -1181,7 +1041,7 @@ Notes generateCounterMelody (Context& ctx, const TrackSpec& t, Rng& rng)
 
     int prev = (t.lowNote + t.highNote) / 2;
 
-    for (auto& ch : ctx.chordsBetween (t.entryBar * m.ticksPerBar, ctx.totalTicks))
+    for (auto& ch : ctx.chordsBetween (ctx.partStart (t), ctx.partEnd (t)))
     {
         const int len = ch.end - ch.start;
         int segments = std::max (1, perChord);
@@ -1278,7 +1138,7 @@ std::string defaultChordPattern (const Context& ctx, const TrackSpec& t)
     return t.density < 0.4 ? "sustain" : "block";
 }
 
-void addHit (Notes& out, const std::vector<int>& pitches, int start, int length, double velocity, int rollTicks = 0, bool descending = false)
+void addHit (Notes& out, const std::vector<int>& pitches, int start, int length, double velocity, int rollTicks, bool descending)
 {
     for (size_t i = 0; i < pitches.size(); ++i)
     {
@@ -1319,7 +1179,7 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
         highNote = std::min (instHi, std::max (highNote, lowNote + 19));
     }
 
-    for (auto& ch : ctx.chordsBetween (t.entryBar * m.ticksPerBar, ctx.totalTicks))
+    for (auto& ch : ctx.chordsBetween (ctx.partStart (t), ctx.partEnd (t)))
     {
         const auto wanted = wantedPcs (ch.chord, voices, comp);
         const auto voicing = voiceChord (wanted, ch.chord.rootPc, lowNote, highNote, prevVoicing, maxSpread, false);
@@ -1384,7 +1244,7 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
         }
         else if (pattern == "broken")
         {
-            const int bassNote = bassPitchFor (ch.chord.rootPc, t.lowNote, std::min (t.highNote, t.lowNote + 14), -1);
+            const int bassNote = bassPitchFor (ch.bassRoot(), t.lowNote, std::min (t.highNote, t.lowNote + 14), -1);
             std::vector<int> sweep { bassNote };
 
             for (int p = bassNote + 1; p <= std::min (t.highNote, bassNote + 20) && sweep.size() < 5; ++p)
@@ -1535,7 +1395,7 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
         }
         else if (pattern == "waltz")
         {
-            const int bassNote = bassPitchFor (ch.chord.rootPc, t.lowNote, std::min (t.highNote, t.lowNote + 14), -1);
+            const int bassNote = bassPitchFor (ch.bassRoot(), t.lowNote, std::min (t.highNote, t.lowNote + 14), -1);
             std::vector<int> upper;
 
             for (int p : voicing)
@@ -1579,7 +1439,7 @@ void generateChords (Context& ctx, const TrackSpec& t, Rng& rng, Notes& out, Con
         }
         else if (pattern == "power")
         {
-            const int root = bassPitchFor (ch.chord.rootPc, t.lowNote, std::min (t.highNote, t.lowNote + 12), -1);
+            const int root = bassPitchFor (ch.bassRoot(), t.lowNote, std::min (t.highNote, t.lowNote + 12), -1);
             const std::vector<int> power { root, root + 7, root + 12 };
             const int step = t.density >= 0.5 ? sub : beat;
 
@@ -1642,7 +1502,7 @@ Notes generateArpeggio (Context& ctx, const TrackSpec& t, Rng& rng)
 
     const double target = lowNote + (highNote - lowNote) * 0.4;
 
-    for (auto& ch : ctx.chordsBetween (t.entryBar * m.ticksPerBar, ctx.totalTicks))
+    for (auto& ch : ctx.chordsBetween (ctx.partStart (t), ctx.partEnd (t)))
     {
         std::vector<int> pool;
 
@@ -1772,13 +1632,13 @@ Notes generateBass (Context& ctx, const TrackSpec& t, Rng& rng)
         out.push_back (n);
     };
 
-    const auto chords = ctx.chordsBetween (t.entryBar * m.ticksPerBar, ctx.totalTicks);
+    const auto chords = ctx.chordsBetween (ctx.partStart (t), ctx.partEnd (t));
 
     for (size_t ci = 0; ci < chords.size(); ++ci)
     {
         const auto& ch = chords[ci];
         const int s = ch.start, e = ch.end, len = e - s;
-        const int root = bassPitchFor (ch.chord.rootPc, t.lowNote, t.highNote, prev);
+        const int root = bassPitchFor (ch.bassRoot(), t.lowNote, t.highNote, prev);
         prev = root;
         const int fifth = fifthAbove (root, t.highNote);
         const double v = t.velocity * ctx.energyAt (s);
@@ -1836,7 +1696,7 @@ Notes generateBass (Context& ctx, const TrackSpec& t, Rng& rng)
         else if (pattern == "walking")
         {
             const ChordEvent* next = ci + 1 < chords.size() ? &chords[ci + 1] : nullptr;
-            const int nextRoot = next ? bassPitchFor (next->chord.rootPc, t.lowNote, t.highNote, root) : root;
+            const int nextRoot = next ? bassPitchFor (next->bassRoot(), t.lowNote, t.highNote, root) : root;
             const int beats = std::max (1, len / beat);
             const int third = ch.chord.hasInterval (3) ? 3 : 4;
             const int seventh = ch.chord.hasInterval (11) ? 11 : (ch.chord.hasInterval (9) && ! ch.chord.hasInterval (10) ? 9 : 10);
@@ -1951,9 +1811,9 @@ Notes generateOstinato (Context& ctx, const TrackSpec& t, Rng&)
     const std::string pattern = t.pattern == "auto" ? "epic" : t.pattern;
     int prev = -1;
 
-    for (auto& ch : ctx.chordsBetween (t.entryBar * m.ticksPerBar, ctx.totalTicks))
+    for (auto& ch : ctx.chordsBetween (ctx.partStart (t), ctx.partEnd (t)))
     {
-        const int root = bassPitchFor (ch.chord.rootPc, t.lowNote, std::min (t.highNote, t.lowNote + 12), prev);
+        const int root = bassPitchFor (ch.bassRoot(), t.lowNote, std::min (t.highNote, t.lowNote + 12), prev);
         prev = root;
         const int fifth = root + 7;
         const int octave = root + 12;
@@ -2240,7 +2100,7 @@ Notes generateDrums (Context& ctx, const TrackSpec& t, Rng& rng)
 
     const int lastBar = ctx.bars - 1;
 
-    for (int bar = t.entryBar; bar < ctx.bars; ++bar)
+    for (int bar = t.entryBar; bar < ctx.partEndBar (t); ++bar)
     {
         const int bs = bar * m.ticksPerBar;
 
@@ -2463,6 +2323,7 @@ Track finalizeTrack (const Context& ctx, const TrackSpec& ts, Notes raw, Control
         note.length = length;
         note.pitch = clampv (n.pitch, 0, 127);
         note.velocity = clampv ((int) std::lround (vel), 1, 127);
+        note.articulation = n.articulation;
         track.notes.push_back (note);
     }
 
@@ -2481,10 +2342,12 @@ Track finalizeTrack (const Context& ctx, const TrackSpec& ts, Notes raw, Control
         {
             Note& prev = cleaned[it->second];
 
-            if (prev.start == n.start)
+            if (n.start - prev.start < 12)
             {
+                // Two strikes of the same note a few ticks apart (layered parts, humanised
+                // timing) are one note.
                 prev.velocity = std::max (prev.velocity, n.velocity);
-                prev.length = std::max (prev.length, n.length);
+                prev.length = std::max (prev.length, n.start + n.length - prev.start);
                 continue;
             }
 
@@ -2521,7 +2384,27 @@ uint64_t hashString (const std::string& s)
     return h;
 }
 
-} // namespace
+} // namespace detail
+
+using namespace detail;
+
+const char* articulationName (Articulation a)
+{
+    switch (a)
+    {
+        case Articulation::Default:   return "default";
+        case Articulation::Legato:    return "legato";
+        case Articulation::Sustain:   return "sustain";
+        case Articulation::Staccato:  return "staccato";
+        case Articulation::Spiccato:  return "spiccato";
+        case Articulation::Marcato:   return "marcato";
+        case Articulation::Pizzicato: return "pizzicato";
+        case Articulation::Tremolo:   return "tremolo";
+        case Articulation::Trill:     return "trill";
+    }
+
+    return "default";
+}
 
 //==============================================================================
 std::string Composition::summary() const
@@ -2558,7 +2441,9 @@ int Composition::noteCount() const
     return n;
 }
 
-Composition compose (const StyleSpec& specIn, uint64_t seed)
+namespace
+{
+Composition composeOnce (const StyleSpec& specIn, uint64_t seed)
 {
     StyleSpec spec = specIn;
     normalizeSpec (spec);
@@ -2592,7 +2477,7 @@ Composition compose (const StyleSpec& specIn, uint64_t seed)
     const bool flats = keyPrefersFlats (spec.keyRoot, spec.mode);
 
     for (auto& c : ctx.chords)
-        comp.chords.push_back ({ c.start, c.end, chordName (c.chord, flats), c.roman });
+        comp.chords.push_back ({ c.start, c.end, chordName (c.chord, flats), c.roman, c.pcs, c.bassPc });
 
     // Melodies first, so counter-melodies can steer around the lead.
     std::vector<size_t> order;
@@ -2642,6 +2527,39 @@ Composition compose (const StyleSpec& specIn, uint64_t seed)
     }
 
     return comp;
+}
+
+} // namespace
+
+Composition compose (const StyleSpec& spec, uint64_t seed)
+{
+    // Every generation is checked: several takes are composed, mechanically repaired where
+    // possible, scored, and the best one is kept. Deterministic for a given seed.
+    const int takes = spec.orchestral ? 4 : 3;
+    Composition best;
+    double bestScore = -1.0;
+    int tried = 0;
+
+    for (int k = 0; k < takes; ++k)
+    {
+        const uint64_t takeSeed = k == 0 ? seed : seed * 0x9E3779B97F4A7C15ull + (uint64_t) k * 0x632BE59BD9B4E019ull;
+        Composition c = spec.orchestral ? composeCue (spec, takeSeed) : composeOnce (spec, takeSeed);
+        repairComposition (c);
+        c.quality = checkQuality (c);
+        ++tried;
+
+        if (c.quality.score > bestScore + 1e-9)
+        {
+            bestScore = c.quality.score;
+            best = std::move (c);
+        }
+
+        if (bestScore >= 9.95)
+            break;
+    }
+
+    best.quality.candidates = tried;
+    return best;
 }
 
 } // namespace pm

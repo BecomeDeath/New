@@ -54,6 +54,98 @@ using R = Role;
 using M = Mode;
 using D = Dynamics;
 
+/** The standard sections of a symphony orchestra, with practical ranges (sounding pitch) and
+    the GM programs a General MIDI player falls back on. Orchestral templates are built from
+    these, so every cue arrives as a complete orchestral template in the DAW, one track per
+    section, ready to be pointed at a sample library.
+*/
+const std::vector<std::pair<const char*, TrackTemplate>>& standardParts()
+{
+    static const std::vector<std::pair<const char*, TrackTemplate>> parts = {
+        { "vln1",   { "Violins I",       R::Pad,            48, 55,  96, 0.30, 84, 0, "sustain" } },
+        { "vln2",   { "Violins II",      R::Pad,            48, 55,  88, 0.30, 80, 0, "sustain" } },
+        { "vla",    { "Violas",          R::Pad,            48, 48,  79, 0.30, 78, 0, "sustain" } },
+        { "vc",     { "Celli",           R::Pad,            48, 36,  72, 0.30, 82, 0, "sustain" } },
+        { "cb",     { "Basses",          R::Bass,           43, 28,  55, 0.30, 84, 0, "sustain" } },
+        { "solovc", { "Solo Cello",      R::CounterMelody,  42, 40,  76, 0.40, 86, 0, "lyrical" } },
+        { "solovn", { "Solo Violin",     R::CounterMelody,  40, 55,  96, 0.40, 86, 0, "lyrical" } },
+        { "pizz",   { "Strings (pizz.)", R::Chords,         45, 40,  76, 0.45, 74, 0, "pulse" } },
+        { "picc",   { "Piccolo",         R::CounterMelody,  72, 74, 100, 0.40, 72, 0, "sustained" } },
+        { "fl",     { "Flutes",          R::CounterMelody,  73, 60,  96, 0.45, 76, 0, "flowing" } },
+        { "ob",     { "Oboes",           R::CounterMelody,  68, 58,  89, 0.40, 78, 0, "sustained" } },
+        { "cl",     { "Clarinets",       R::CounterMelody,  71, 50,  89, 0.40, 76, 0, "sustained" } },
+        { "bn",     { "Bassoons",        R::Bass,           70, 34,  70, 0.40, 78, 0, "root" } },
+        { "hn",     { "Horns",           R::Chords,         60, 41,  77, 0.35, 90, 0, "block" } },
+        { "tpt",    { "Trumpets",        R::Chords,         56, 55,  82, 0.40, 94, 0, "block" } },
+        { "tbn",    { "Trombones",       R::Chords,         57, 40,  70, 0.40, 94, 0, "block" } },
+        { "tba",    { "Tuba",            R::Bass,           58, 28,  55, 0.30, 92, 0, "sustain" } },
+        { "timp",   { "Timpani",         R::Bass,           47, 38,  57, 0.50, 98, 0, "timpani" } },
+        { "harp",   { "Harp",            R::Arpeggio,       46, 36,  96, 0.50, 70, 0, "updown" } },
+        { "cel",    { "Celesta",         R::Arpeggio,        8, 67, 100, 0.40, 64, 0, "random" } },
+        { "glock",  { "Glockenspiel",    R::CounterMelody,   9, 79, 100, 0.30, 60, 0, "sustained" } },
+        { "piano",  { "Piano",           R::Arpeggio,        0, 40,  96, 0.40, 64, 0, "updown" } },
+        { "choir",  { "Choir",           R::Pad,            52, 45,  79, 0.25, 80, 0, "swell" } },
+        { "bd",     { "Bass Drum",       R::Percussion,      0, 35,  81, 0.50, 100, 0, "orchestral" } },
+        { "cym",    { "Cymbals",         R::Percussion,      0, 35,  81, 0.50, 96, 0, "orchestral" } },
+        { "sn",     { "Snare Drum",      R::Percussion,      0, 35,  81, 0.50, 90, 0, "orchestral" } },
+        { "taiko",  { "Taiko Ensemble",  R::Percussion,      0, 35,  81, 0.60, 104, 0, "tribal" } },
+        { "tam",    { "Tam-tam",         R::Percussion,      0, 35,  81, 0.40, 92, 0, "orchestral" } },
+        { "tri",    { "Triangle",        R::Percussion,      0, 35,  81, 0.30, 70, 0, "orchestral" } },
+        { "kit",    { "Percussion",      R::Percussion,      0, 35,  81, 0.55, 98, 0, "orchestral" } },
+    };
+
+    return parts;
+}
+
+/** Builds an orchestral track list from part ids. Each item is "id", "id:role" or
+    "id:role:pattern"; roles are theme (the part that states the main theme), ost (marks the
+    cue as ostinato-driven, with that ostinato pattern), arp, counter, bass, chords and pad.
+*/
+std::vector<TrackTemplate> orch (std::initializer_list<const char*> items)
+{
+    static std::set<std::string> interned; // stable storage for patterns parsed out of the items
+    std::vector<TrackTemplate> out;
+
+    for (const char* item : items)
+    {
+        std::string text (item), id, role, pattern;
+        const auto c1 = text.find (':');
+        id = text.substr (0, c1);
+
+        if (c1 != std::string::npos)
+        {
+            const auto c2 = text.find (':', c1 + 1);
+            role = text.substr (c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1);
+
+            if (c2 != std::string::npos)
+                pattern = text.substr (c2 + 1);
+        }
+
+        const auto& parts = standardParts();
+        auto it = std::find_if (parts.begin(), parts.end(), [&] (const auto& p) { return id == p.first; });
+
+        if (it == parts.end())
+            continue;
+
+        TrackTemplate t = it->second;
+
+        if (role == "theme")        { t.role = R::Melody; t.pattern = "lyrical"; t.velocity += 8; t.density = 0.45; }
+        else if (role == "ost")     { t.role = R::Ostinato; t.pattern = "epic"; t.density = 0.7; }
+        else if (role == "arp")     t.role = R::Arpeggio;
+        else if (role == "counter") t.role = R::CounterMelody;
+        else if (role == "bass")    t.role = R::Bass;
+        else if (role == "chords")  t.role = R::Chords;
+        else if (role == "pad")     t.role = R::Pad;
+
+        if (! pattern.empty())
+            t.pattern = interned.insert (pattern).first->c_str();
+
+        out.push_back (t);
+    }
+
+    return out;
+}
+
 const std::vector<StyleTemplate>& styles()
 {
     static const std::vector<StyleTemplate> list = {
@@ -66,17 +158,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "V", "vi", "IV" }, { "I", "iii", "IV", "V" }, { "IV", "V", "iii", "vi" }, { "I", "vi", "IV", "V" }, { "I", "IV", "vi", "V" } },
           { { "i", "VI", "III", "VII" }, { "i", "VI", "iv", "V" }, { "i", "iv", "VI", "V" }, { "i", "VII", "VI", "VII" }, { "VI", "VII", "i", "i" }, { "i", "III", "VII", "iv" } },
           1.0, 0.0, false, 0.55, 0.25, 0.5, D::Arc, true, 4, 4, 16, "orchestral",
-          { { "Strings",          R::Pad,           48, 48, 79, 0.30, 78, 0, "sustain" },
-            { "Harp",             R::Arpeggio,      46, 43, 84, 0.55, 70, 0, "updown" },
-            { "Celli",            R::Bass,          42, 36, 60, 0.30, 82, 0, "sustain" },
-            { "Basses",           R::Bass,          43, 28, 48, 0.30, 80, 0, "sustain" },
-            { "Flute",            R::Melody,        73, 67, 93, 0.50, 88, 1, "lyrical" },
-            { "French Horns",     R::CounterMelody, 60, 48, 72, 0.30, 80, 1, "auto" },
-            { "Violins (theme)",  R::CounterMelody, 48, 62, 88, 0.30, 82, 2, "double" },
-            { "Choir",            R::Pad,           52, 52, 76, 0.20, 70, 2, "swell" },
-            { "Brass",            R::Chords,        61, 45, 70, 0.35, 92, 2, "block" },
-            { "Timpani",          R::Bass,          47, 38, 57, 0.40, 95, 2, "timpani" },
-            { "Percussion",       R::Percussion,     0, 35, 81, 0.40, 95, 2, "orchestral" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "picc", "fl", "ob", "cl", "bn", "hn:theme:lyrical", "tpt", "tbn", "tba", "timp", "harp:arp:updown", "glock", "choir", "bd", "cym", "sn" }),
           true, 2,
           { { "IV", "V", "iii", "vi" }, { "vi", "IV", "I", "V" }, { "bVI", "bVII", "I", "I" } },
           { { "VI", "VII", "III", "III" }, { "iv", "VI", "VII", "V" }, { "III", "VII", "VI", "V" } } },
@@ -90,15 +172,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "V", "vi", "IV" }, { "vi", "IV", "I", "V" }, { "I", "IV", "vi", "V" } },
           { { "i", "VI", "III", "VII" }, { "i", "VII", "VI", "VII" }, { "i", "VI", "VII", "i" }, { "VI", "VII", "i", "i" }, { "i", "iv", "VI", "VII" }, { "i", "III", "VI", "VII" } },
           1.0, 0.0, false, 0.8, 0.15, 0.3, D::Build, true, 4, 4, 16, "orchestral",
-          { { "Low Strings Ostinato", R::Ostinato,      48, 36, 62, 0.80,  95, 0, "epic" },
-            { "Strings Pad",          R::Pad,           49, 48, 79, 0.30,  80, 0, "sustain" },
-            { "Contrabass",           R::Bass,          43, 26, 50, 0.30,  95, 0, "sustain" },
-            { "Horns Theme",          R::Melody,        60, 53, 77, 0.45, 100, 1, "lyrical" },
-            { "Choir",                R::Pad,           52, 50, 74, 0.20,  85, 1, "swell" },
-            { "Brass Stabs",          R::Chords,        61, 43, 67, 0.50, 105, 2, "block" },
-            { "Violins (theme 8va)",  R::CounterMelody, 48, 64, 91, 0.30,  95, 2, "double" },
-            { "Timpani",              R::Bass,          47, 38, 57, 0.50, 105, 1, "timpani" },
-            { "Epic Drums",           R::Percussion,     0, 35, 81, 0.70, 110, 1, "orchestral" } },
+          orch ({ "vln1", "vln2", "vla:ost:epic", "vc", "cb", "fl", "cl", "bn", "hn:theme:lyrical", "tpt", "tbn", "tba", "timp", "choir", "taiko", "bd", "cym", "sn", "tam" }),
           true, 0,
           { { "vi", "IV", "V", "V" }, { "bVI", "bVII", "I", "I" } },
           { { "VI", "VII", "i", "i" }, { "iv", "VI", "VII", "V" }, { "III", "VII", "iv", "V" } } },
@@ -111,15 +185,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "bVII", "IV", "I" }, { "I", "V", "vi", "IV" }, { "I", "bVI", "bVII", "I" }, { "I", "iii", "IV", "V" }, { "I", "IV", "bVII", "IV" } },
           { { "i", "VI", "III", "VII" }, { "i", "VII", "VI", "VII" } },
           1.0, 0.0, false, 0.75, 0.15, 0.35, D::Build, true, 4, 4, 16, "orchestral",
-          { { "Strings Ostinato",     R::Ostinato,      48, 43, 67, 0.60,  85, 0, "epic" },
-            { "Celli",                R::Bass,          42, 36, 60, 0.35,  85, 0, "root" },
-            { "Basses",               R::Bass,          43, 28, 48, 0.30,  85, 0, "sustain" },
-            { "Horns (theme)",        R::Melody,        60, 50, 77, 0.45, 100, 1, "lyrical" },
-            { "Violins (theme 8va)",  R::CounterMelody, 48, 64, 91, 0.30,  88, 2, "double" },
-            { "Flutes",               R::CounterMelody, 73, 67, 91, 0.60,  75, 1, "flowing" },
-            { "Trumpets & Trombones", R::Chords,        61, 48, 74, 0.45, 100, 2, "block" },
-            { "Timpani",              R::Bass,          47, 38, 57, 0.50, 100, 1, "timpani" },
-            { "Percussion",           R::Percussion,     0, 35, 81, 0.55, 100, 1, "orchestral" } },
+          orch ({ "vln1", "vln2", "vla:ost:epic", "vc", "cb", "picc", "fl", "ob", "cl", "bn", "hn:theme:lyrical", "tpt", "tbn", "tba", "timp", "harp:arp:updown", "glock", "bd", "cym", "sn" }),
           true, 2,
           { { "vi", "IV", "I", "V" }, { "IV", "V", "iii", "vi" }, { "bVI", "bVII", "I", "I" } },
           { { "VI", "VII", "i", "i" }, { "iv", "VI", "VII", "V" } } },
@@ -131,13 +197,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "bVI", "bVII", "I" }, { "vi", "IV", "V", "V" } },
           { { "i", "i", "VI", "VII" }, { "i", "VI", "VII", "VII" }, { "i", "iv", "VI", "VII" }, { "i", "III", "VII", "VI" } },
           1.0, 0.0, false, 0.9, 0.1, 0.2, D::Build, false, 4, 4, 16, "tribal",
-          { { "Spiccato Strings",    R::Ostinato,      48, 43, 67, 0.85,  95, 0, "epic" },
-            { "Low Brass (theme)",   R::Melody,        57, 40, 69, 0.55, 105, 1, "rhythmic" },
-            { "Horns",               R::Chords,        60, 48, 72, 0.60,  95, 1, "stabs" },
-            { "Violins (theme 8va)", R::CounterMelody, 48, 64, 93, 0.60,  85, 2, "double" },
-            { "Basses",              R::Bass,          43, 28, 48, 0.80, 100, 0, "pedal" },
-            { "Timpani",             R::Bass,          47, 38, 57, 0.60, 105, 0, "timpani" },
-            { "Taiko & Percussion",  R::Percussion,     0, 35, 81, 0.80, 110, 0, "tribal" } },
+          orch ({ "vln1", "vln2", "vla:ost:epic", "vc", "cb", "picc", "fl", "cl", "bn", "hn:theme:rhythmic", "tpt", "tbn", "tba", "timp", "taiko", "bd", "cym", "sn" }),
           true, 0,
           { { "IV", "V", "vi", "vi" } },
           { { "VI", "VII", "i", "i" }, { "iv", "v", "VI", "VII" } } },
@@ -150,12 +210,7 @@ const std::vector<StyleTemplate>& styles()
           {},
           { { "i", "i", "bII", "i" }, { "i", "iv", "i", "V" }, { "i", "VI", "iio", "V" } },
           0.5, 0.0, false, 0.45, 0.3, 0.4, D::Flat, false, 4, 4, 16, "ambient",
-          { { "Pizzicato Ostinato", R::Arpeggio,      45, 40, 64, 0.55, 80, 0, "updown" },
-            { "Low Strings Pedal",  R::Bass,          43, 28, 48, 0.20, 75, 0, "sustain" },
-            { "Clarinet (motif)",   R::Melody,        71, 50, 74, 0.30, 82, 1, "sparse" },
-            { "Tremolo Strings",    R::Pad,           44, 55, 79, 0.20, 55, 1, "swell" },
-            { "Muted Horns",        R::CounterMelody, 60, 48, 67, 0.25, 70, 2, "sustained" },
-            { "Percussion",         R::Percussion,     0, 35, 81, 0.35, 85, 2, "ambient" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "pizz:arp:updown", "fl", "cl:theme:sparse", "bn", "hn", "harp", "timp", "bd", "tam" }),
           true, 0,
           {},
           { { "iv", "iv", "V", "V" }, { "VI", "bII", "V", "V" } } },
@@ -168,11 +223,7 @@ const std::vector<StyleTemplate>& styles()
           { { "vi", "IV", "I", "V" }, { "I", "iii", "vi", "IV" } },
           { { "i", "VI", "III", "VII" }, { "i", "iv", "VI", "V" }, { "VI", "VII", "i", "i" }, { "i", "III", "iv", "VI" } },
           1.0, 0.0, false, 0.35, 0.35, 0.6, D::Arc, true, 4, 4, 16, "ambient",
-          { { "Solo Cello",          R::Melody,        42, 45, 74, 0.35, 85, 1, "lyrical" },
-            { "Strings",             R::Pad,           49, 48, 79, 0.20, 70, 0, "swell" },
-            { "Piano",               R::Arpeggio,       0, 43, 76, 0.40, 62, 0, "updown" },
-            { "Violins (theme 8va)", R::CounterMelody, 48, 64, 91, 0.25, 70, 2, "double" },
-            { "Basses",              R::Bass,          43, 28, 48, 0.20, 70, 0, "sustain" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "solovc:theme:lyrical", "piano:arp:updown", "fl", "ob", "cl", "bn", "hn", "harp", "choir", "timp" }),
           true, 0,
           { { "IV", "iv", "I", "V" }, { "vi", "iii", "IV", "V" } },
           { { "VI", "III", "iv", "V" }, { "iv", "i", "VI", "V" } } },
@@ -185,13 +236,7 @@ const std::vector<StyleTemplate>& styles()
           {},
           { { "i", "VI", "i", "VII" }, { "i", "III", "iv", "VI" } },
           0.5, 0.0, false, 0.35, 0.45, 0.5, D::Arc, false, 4, 4, 16, "ambient",
-          { { "High Strings",     R::Pad,           49, 60, 88, 0.15, 60, 0, "swell" },
-            { "Celesta",          R::Arpeggio,       8, 67, 96, 0.40, 60, 0, "random" },
-            { "Harp",             R::Arpeggio,      46, 43, 79, 0.30, 62, 1, "updown" },
-            { "Clarinet",         R::Melody,        71, 55, 84, 0.30, 80, 1, "lyrical" },
-            { "Flute",            R::CounterMelody, 73, 62, 86, 0.25, 65, 2, "sustained" },
-            { "Low Strings",      R::Bass,          43, 28, 50, 0.20, 70, 0, "sustain" },
-            { "Percussion",       R::Percussion,     0, 35, 81, 0.25, 70, 2, "ambient" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "fl", "ob", "cl:theme:lyrical", "bn", "hn", "harp:arp:updown", "cel", "timp", "tam", "tri" }),
           true, 0,
           {},
           { { "VI", "iv", "VII", "VII" } } },
@@ -203,12 +248,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "IV", "I", "V" }, { "I", "vi", "IV", "V" }, { "I", "V", "vi", "IV" }, { "I", "iii", "IV", "I" }, { "IV", "I", "V", "I" } },
           { { "i", "iv", "VII", "III" } },
           1.0, 0.0, false, 0.45, 0.2, 0.5, D::Arc, true, 4, 4, 16, "folk",
-          { { "Oboe",              R::Melody,        68, 62, 86, 0.45, 82, 0, "lyrical" },
-            { "Flute",             R::CounterMelody, 73, 67, 91, 0.45, 72, 1, "flowing" },
-            { "Pizzicato Strings", R::Chords,        45, 48, 72, 0.45, 72, 0, "pulse" },
-            { "Harp",              R::Arpeggio,      46, 48, 84, 0.45, 62, 0, "updown" },
-            { "Bassoon",           R::Bass,          70, 34, 58, 0.45, 75, 0, "rootfifth" },
-            { "Strings",           R::Pad,           48, 52, 76, 0.15, 55, 1, "sustain" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "pizz:chords:pulse", "fl", "ob:theme:lyrical", "cl", "bn:bass:rootfifth", "hn", "harp:arp:updown", "tri" }),
           true, 0,
           { { "IV", "V", "iii", "vi" }, { "vi", "IV", "ii", "V" } },
           {} },
@@ -221,14 +261,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "II", "IV", "I" }, { "I", "bVI", "bVII", "I" }, { "I", "iii", "vi", "IV" } },
           { { "i", "VI", "III", "VII" }, { "i", "bII", "VI", "VII" } },
           0.5, 0.0, false, 0.55, 0.4, 0.4, D::Build, true, 4, 4, 16, "orchestral",
-          { { "Strings",             R::Pad,           49, 48, 84, 0.20, 72, 0, "swell" },
-            { "Harp",                R::Arpeggio,      46, 55, 91, 0.55, 62, 0, "updown" },
-            { "Horns (theme)",       R::Melody,        60, 50, 77, 0.35, 90, 1, "lyrical" },
-            { "Violins (theme 8va)", R::CounterMelody, 48, 64, 93, 0.30, 80, 2, "double" },
-            { "Choir",               R::Pad,           52, 52, 76, 0.20, 68, 1, "swell" },
-            { "Basses",              R::Bass,          43, 28, 50, 0.20, 75, 0, "sustain" },
-            { "Timpani",             R::Bass,          47, 38, 57, 0.30, 85, 2, "timpani" },
-            { "Percussion",          R::Percussion,     0, 35, 81, 0.30, 85, 2, "orchestral" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "fl", "ob", "cl", "bn", "hn:theme:lyrical", "tpt", "tbn", "tba", "timp", "harp:arp:updown", "cel", "choir", "bd", "cym", "tam" }),
           true, 2,
           { { "vi", "IV", "bVII", "V" }, { "IV", "bVII", "I", "I" } },
           { { "VI", "VII", "III", "III" } } },
@@ -240,12 +273,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "vi", "ii", "V" }, { "I", "IV", "V", "I" }, { "I", "iii", "IV", "V" } },
           { { "i", "iv", "V", "i" }, { "i", "VI", "iio", "V" } },
           1.0, 0.0, false, 0.55, 0.35, 0.4, D::Arc, true, 3, 4, 16, "waltz",
-          { { "Celesta",           R::Melody,        8, 67, 96, 0.50, 85, 0, "lyrical" },
-            { "Pizzicato Strings", R::Chords,       45, 43, 72, 0.50, 75, 0, "waltz" },
-            { "Clarinet",          R::CounterMelody, 71, 55, 79, 0.50, 72, 1, "flowing" },
-            { "Bassoon",           R::Bass,          70, 34, 58, 0.50, 78, 0, "root" },
-            { "Glockenspiel",      R::CounterMelody,  9, 79, 100, 0.30, 65, 2, "double" },
-            { "Strings",           R::Pad,           49, 55, 79, 0.15, 55, 1, "sustain" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "pizz:chords:waltz", "picc", "fl", "ob", "cl:counter:flowing", "bn:bass:root", "hn", "cel:theme:lyrical", "glock", "harp", "tri" }),
           true, 0,
           { { "IV", "V", "iii", "vi" }, { "vi", "II7", "ii", "V7" } },
           { { "VI", "iv", "V", "V" } } },
@@ -258,14 +286,7 @@ const std::vector<StyleTemplate>& styles()
           {},
           { { "i", "VI", "iv", "V" }, { "i", "bII", "i", "V" }, { "i", "bV", "iv", "i" } },
           1.0, 0.0, false, 0.7, 0.2, 0.35, D::Build, true, 4, 4, 16, "orchestral",
-          { { "Low Strings Ostinato", R::Ostinato,      48, 36, 60, 0.70,  90, 0, "epic" },
-            { "Trombones & Tuba",     R::Melody,        57, 40, 67, 0.40, 100, 1, "lyrical" },
-            { "Choir",                R::Pad,           52, 48, 74, 0.25,  85, 1, "swell" },
-            { "Horns",                R::Chords,        60, 45, 70, 0.40,  95, 2, "block" },
-            { "Tremolo Violins",      R::CounterMelody, 44, 67, 91, 0.30,  75, 2, "sustained" },
-            { "Basses",               R::Bass,          43, 28, 48, 0.30,  95, 0, "sustain" },
-            { "Timpani",              R::Bass,          47, 38, 57, 0.50, 105, 1, "timpani" },
-            { "Percussion",           R::Percussion,     0, 35, 81, 0.55, 105, 1, "orchestral" } },
+          orch ({ "vln1", "vln2", "vla", "vc:ost:epic", "cb", "cl", "bn", "hn", "tpt", "tbn:theme:lyrical", "tba", "timp", "choir", "bd", "cym", "tam", "sn" }),
           true, 1,
           {},
           { { "iv", "bII", "V", "V" }, { "VI", "bII", "V", "V" } } },
@@ -277,13 +298,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "IV", "V", "I" }, { "I", "bVI", "bVII", "I" }, { "I", "V", "IV", "I" }, { "I", "IV", "I", "V" } },
           { { "i", "VI", "VII", "i" } },
           1.0, 0.0, false, 0.9, 0.1, 0.2, D::Build, true, 4, 4, 8, "march",
-          { { "Trumpets",        R::Melody,        56, 60, 84, 0.60, 108, 0, "rhythmic" },
-            { "Horns",           R::CounterMelody, 60, 50, 74, 0.40, 100, 0, "sustained" },
-            { "Trombones",       R::Chords,        57, 43, 67, 0.50, 100, 0, "block" },
-            { "Tuba",            R::Bass,          58, 28, 50, 0.40, 100, 0, "root" },
-            { "Strings",         R::Pad,           48, 50, 84, 0.30,  80, 0, "sustain" },
-            { "Timpani",         R::Bass,          47, 38, 57, 0.60, 105, 0, "timpani" },
-            { "Snare & Cymbals", R::Percussion,     0, 35, 81, 0.60, 105, 0, "march" } },
+          orch ({ "vln1", "vln2", "vla", "vc", "cb", "picc", "fl", "ob", "cl", "bn", "hn:counter:sustained", "tpt:theme:rhythmic", "tbn", "tba", "timp", "glock", "kit::march" }),
           true, 0,
           { { "vi", "IV", "V", "V" } },
           {} },
@@ -295,13 +310,7 @@ const std::vector<StyleTemplate>& styles()
           { { "I", "V", "vi", "IV" } },
           { { "i", "VII", "VI", "V" }, { "i", "iv", "VII", "III" }, { "i", "VI", "VII", "i" }, { "i", "III", "VII", "i" } },
           1.0, 0.0, false, 0.8, 0.1, 0.35, D::Build, true, 6, 8, 16, "folk",
-          { { "Strings Gallop",      R::Ostinato,      48, 43, 64, 0.70,  92, 0, "gallop" },
-            { "Horns (theme)",       R::Melody,        60, 50, 77, 0.55, 100, 1, "rhythmic" },
-            { "Violins (theme 8va)", R::CounterMelody, 48, 64, 93, 0.40,  85, 2, "double" },
-            { "Trombones",           R::Chords,        57, 43, 67, 0.45,  95, 1, "block" },
-            { "Basses",              R::Bass,          43, 28, 50, 0.50,  95, 0, "root" },
-            { "Timpani",             R::Bass,          47, 38, 57, 0.50, 100, 1, "timpani" },
-            { "Percussion",          R::Percussion,     0, 35, 81, 0.60, 100, 0, "folk" } },
+          orch ({ "vln1", "vln2", "vla:ost:gallop", "vc", "cb", "picc", "fl", "ob", "cl", "bn", "hn:theme:rhythmic", "tpt", "tbn", "tba", "timp", "kit::folk" }),
           true, 2,
           {},
           { { "III", "VII", "iv", "V" }, { "VI", "VII", "i", "i" } } },
@@ -1070,6 +1079,56 @@ std::string makeTitle (const std::vector<std::string>& tokens, const std::vector
     return title.empty() ? fallback : title;
 }
 
+std::string lowerCopy (std::string s)
+{
+    for (auto& c : s)
+        c = (char) std::tolower ((unsigned char) c);
+
+    return s;
+}
+
+/** Position in a conductor's score (and in an orchestral DAW template): woodwinds, brass,
+    timpani and percussion, harp and keyboards, choir, soloists, then the strings.
+*/
+int scoreOrder (const TrackSpec& t)
+{
+    const int p = t.program;
+    const auto name = lowerCopy (t.name);
+    const bool solo = name.find ("solo") != std::string::npos;
+
+    if (t.role == Role::Percussion)        return 120;
+    if (p == 72)                           return 10;
+    if (p >= 73 && p <= 75)                return 11;
+    if (p >= 68 && p <= 69)                return 12;
+    if (p == 71)                           return 13;
+    if (p == 70)                           return 14;
+    if (p >= 64 && p <= 79)                return 15;
+    if (p >= 60 && p <= 61)                return 20;
+    if (p == 56 || p == 59)                return 21;
+    if (p == 57)                           return 22;
+    if (p == 58)                           return 23;
+    if (p >= 62 && p <= 63)                return 24;
+    if (p == 47)                           return 110;
+    if (p == 46)                           return 130;
+    if (p >= 8 && p <= 14)                 return 131;
+    if (p <= 7)                            return 132;
+    if (p >= 52 && p <= 54)                return 140;
+    if (solo && p >= 40 && p <= 51)        return 150;
+
+    if ((p >= 40 && p <= 51) && ! solo)
+    {
+        if (name.find ("violins ii") != std::string::npos || name.find ("violin ii") != std::string::npos) return 161;
+        if (name.find ("violin") != std::string::npos || p == 40)  return 160;
+        if (name.find ("viola") != std::string::npos || p == 41)   return 162;
+        if (name.find ("cell") != std::string::npos || p == 42)    return 163;
+        if (name.find ("bass") != std::string::npos || p == 43)    return 164;
+        if (p == 45)                                               return 165;
+        return 159;
+    }
+
+    return 145; // genre soloists (fiddle, koto, oud, guitar...) sit between the choir and the strings
+}
+
 std::string joinList (const std::vector<std::string>& items)
 {
     std::string s;
@@ -1720,7 +1779,7 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
                 }
             }
 
-            if (tracks.size() >= 12)
+            if (tracks.size() >= (style->orchestral ? 22u : 12u))
                 continue;
 
             const bool hasLead = std::any_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.role == Role::Melody; });
@@ -1786,25 +1845,109 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
         const bool energetic = style->energy + energyDelta >= 0.5;
         const bool combat = hasWord ("battle") || hasWord ("fight") || hasWord ("duel") || hasWord ("war") || hasWord ("combat")
                          || hasWord ("boss") || hasWord ("chase") || hasWord ("action") || hasWord ("siege") || hasWord ("samurai");
+        const bool martial = combat || std::string (style->id) == "march";
 
-        if (! has (40, 44) && ! has (48, 51))
-            add ("Strings", Role::Pad, 48, 48, 79, 0.25, 72, 0, "swell");
-
-        if (std::none_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.role == Role::Bass; }))
-            add ("Basses", Role::Bass, 43, 28, 48, 0.25, 80, 0, "sustain");
-
-        if (! has (56, 63))
+        auto hasName = [&] (const char* what)
         {
-            const bool haveCounter = std::any_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.role == Role::CounterMelody; });
-            add ("Horns", haveCounter ? Role::Pad : Role::CounterMelody, 60, 45, 72, 0.3, 85, 1, haveCounter ? "sustain" : "sustained");
+            return std::any_of (tracks.begin(), tracks.end(), [&] (const Planned& p) { return lowerCopy (p.spec.name).find (what) != std::string::npos; });
+        };
+
+        auto addPart = [&] (const char* id, int layer)
+        {
+            for (auto& t : orch ({ id }))
+                add (t.name, t.role, t.program, t.low, t.high, t.density, t.velocity, layer, t.pattern);
+        };
+
+        // Solo string patches become their sections (unless the prompt asked for the soloist); a
+        // pizzicato bass line becomes pizzicato strings over the basses; generic string pads and
+        // chord parts give way to the full string section.
+        for (auto& p : tracks)
+        {
+            auto& ts = p.spec;
+
+            if (ts.role == Role::Percussion)
+                continue;
+
+            if (ts.program >= 40 && ts.program <= 42)
+            {
+                if (p.explicitInstrument)
+                {
+                    if (lowerCopy (ts.name).find ("solo") == std::string::npos)
+                        ts.name = "Solo " + ts.name;
+                }
+                else
+                {
+                    static const char* sections[] = { "Violins I", "Violas", "Celli" };
+                    ts.name = sections[ts.program - 40];
+                    ts.program = 48;
+                }
+            }
+
+            if (ts.program == 45 && ts.role == Role::Bass)
+            {
+                ts.role = Role::Chords;
+                ts.name = "Strings (pizz.)";
+                ts.lowNote = std::max (ts.lowNote, 48);
+                ts.highNote = std::max (ts.highNote, 74);
+                ts.pattern = spec.tsNum == 3 ? "waltz" : "pulse";
+            }
+        }
+
+        tracks.erase (std::remove_if (tracks.begin(), tracks.end(), [] (const Planned& p)
+        {
+            if (p.explicitInstrument || p.spec.program < 48 || p.spec.program > 51)
+                return false;
+
+            const auto name = lowerCopy (p.spec.name);
+            const bool section = name.find ("violin") != std::string::npos || name.find ("viola") != std::string::npos
+                              || name.find ("cell") != std::string::npos || name.find ("bass") != std::string::npos;
+            return ! section && (p.spec.role == Role::Pad || p.spec.role == Role::Chords);
+        }), tracks.end());
+
+        if (! hasName ("violins i") && ! hasName ("violin i"))  addPart ("vln1", 0);
+        if (! hasName ("violins ii") && ! hasName ("violin ii")) addPart ("vln2", 0);
+        if (! hasName ("viola"))                               addPart ("vla", 0);
+        if (! hasName ("cell"))                                addPart ("vc", 0);
+
+        if (std::none_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.program == 43; }))
+        {
+            for (auto& p : tracks)
+                if (p.spec.role == Role::Bass && p.spec.program != 47 && p.spec.program != 70 && p.spec.program != 58 && ! p.explicitInstrument)
+                    p.spec.role = Role::Chords; // the basses take over the bass line
+
+            addPart ("cb", 0);
+        }
+
+        // Woodwinds (a signature wind such as a tin whistle or shakuhachi keeps its own track).
+        if (! has (73, 73) && ! has (72, 72)) addPart ("fl", 1);
+        if (! has (68, 69))                   addPart ("ob", 1);
+        if (! has (71, 71))                   addPart ("cl", 1);
+        if (! has (70, 70))                   addPart ("bn", 1);
+
+        // Brass: horns always, the heavy brass for energetic or martial music.
+        if (! has (60, 61))                   addPart ("hn", 1);
+
+        if (energetic || martial)
+        {
+            if (! has (56, 56)) addPart ("tpt", 2);
+            if (! has (57, 57)) addPart ("tbn", 2);
+            if (! has (58, 58)) addPart ("tba", 2);
         }
 
         if (! has (47, 47) && (energetic || combat))
-            add ("Timpani", Role::Bass, 47, 38, 57, 0.4, 95, 1, "timpani");
+            addPart ("timp", 1);
 
-        if (std::none_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.role == Role::Percussion; })
-            && (combat || style->energy + energyDelta >= 0.6))
-            add ("Percussion", Role::Percussion, 0, 35, 81, 0.5, 95, 1, style->drums);
+        if (! has (46, 46) && ! energetic)
+            addPart ("harp", 0);
+
+        if (std::none_of (tracks.begin(), tracks.end(), [] (const Planned& p) { return p.spec.role == Role::Percussion; }))
+        {
+            if (combat || style->energy + energyDelta >= 0.6)
+            {
+                addPart ("bd", 1);
+                addPart ("cym", 1);
+            }
+        }
 
         if (! orchestrated.empty())
             spec.interpretation.push_back ("Orchestrated: " + joinList (orchestrated));
@@ -1859,6 +2002,24 @@ StyleSpec interpretPrompt (const std::string& prompt, uint64_t seed, const Promp
             ts.entryBar = 0;
 
         spec.tracks.push_back (ts);
+    }
+
+    // Orchestral music is composed as a full cue (form, development, orchestration).
+    spec.orchestral = style->orchestral || orchestralWanted;
+
+    if (spec.orchestral && ! soloMode)
+        std::stable_sort (spec.tracks.begin(), spec.tracks.end(), [] (const TrackSpec& a, const TrackSpec& b) { return scoreOrder (a) < scoreOrder (b); });
+
+    if (spec.orchestral)
+    {
+        spec.length = style->bars <= 8 ? "sketch" : "full";
+
+        if (hasWord ("short") || hasWord ("sketch") || hasWord ("idea"))           spec.length = "sketch";
+        if (hasWord ("cue") || hasWord ("1 minute") || hasWord ("one minute"))     spec.length = "cue";
+        if (hasWord ("full") || hasWord ("complete") || hasWord ("full length"))   spec.length = "full";
+        if (hasWord ("long") || hasWord ("extended") || hasWord ("epic length"))   spec.length = "extended";
+        if (explicitBars > 0 || explicitSeconds > 0.0)                             spec.length = "bars";
+        if (overrides.length.size() > 0)                                           spec.length = overrides.length;
     }
 
     spec.title = makeTitle (tokens, titleSkip, style->name);
