@@ -218,7 +218,7 @@ void SampledSynth::build()
         if (p->synth != nullptr)
         {
             // Everything the audio thread needs is allocated here: 16 channels, a fixed voice pool.
-            tsf_set_output (p->synth, TSF_STEREO_INTERLEAVED, (int) sampleRate, -10.0f);
+            tsf_set_output (p->synth, TSF_STEREO_INTERLEAVED, (int) sampleRate, -8.0f);
             tsf_set_max_voices (p->synth, 256);
             tsf_channel_set_presetnumber (p->synth, 15, 0, 0);
 

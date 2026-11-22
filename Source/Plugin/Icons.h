@@ -6,7 +6,7 @@
 namespace Icons
 {
     enum class Kind { Play, Stop, Loop, Speaker, Gear, Download, Plus, Cross, Lock, Sparkle, Shuffle, ZoomIn, ZoomOut,
-                      Fit, Follow, MidiOut, Instruments, Undo, Redo, Edit, Export, ChevronLeft, ChevronRight };
+                      Fit, Follow, MidiOut, Instruments, Undo, Redo, Edit, Export, ChevronLeft, ChevronRight, Folder };
 
     inline void addLine (juce::Path& p, float x0, float y0, float x1, float y1)
     {
@@ -114,6 +114,11 @@ namespace Icons
                     p.applyTransform (juce::AffineTransform::scale (-1.0f, 1.0f, 12.0f, 12.0f));
                 break;
             }
+            case Kind::Folder:
+                p.startNewSubPath (3.5f, 18.5f); p.lineTo (3.5f, 6.0f); p.lineTo (9.5f, 6.0f); p.lineTo (11.5f, 8.5f);
+                p.lineTo (20.5f, 8.5f); p.lineTo (20.5f, 18.5f); p.closeSubPath();
+                addLine (p, 3.5f, 11.5f, 20.5f, 11.5f);
+                break;
             case Kind::ChevronLeft:  p.startNewSubPath (14.5f, 6.5f); p.lineTo (9.0f, 12.0f); p.lineTo (14.5f, 17.5f); break;
             case Kind::ChevronRight: p.startNewSubPath (9.5f, 6.5f); p.lineTo (15.0f, 12.0f); p.lineTo (9.5f, 17.5f); break;
             case Kind::Edit:

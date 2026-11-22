@@ -49,8 +49,25 @@ private:
     juce::String soundSetting() const;
 };
 
+/** Names a preset before it's saved (shown in a call-out under the Presets button). */
+class SavePresetPanel : public juce::Component
+{
+public:
+    SavePresetPanel (const juce::String& suggestedName, bool hasPiece, std::function<void (const juce::String&)> onSave);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    juce::Label heading, note;
+    juce::TextEditor nameEditor;
+    juce::TextButton saveButton { "Save" }, cancelButton { "Cancel" };
+    std::function<void (const juce::String&)> onSave;
+    void save();
+};
+
 //==============================================================================
 class PromptMidiEditor : public juce::AudioProcessorEditor,
+                         public juce::FileDragAndDropTarget,
                          private juce::ChangeListener,
                          private juce::Timer
 {
@@ -59,8 +76,18 @@ public:
     ~PromptMidiEditor() override;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+
+    // Drop a .mid or .promptmidi file anywhere on the window to import it.
+    bool isInterestedInFileDrag (const juce::StringArray&) override;
+    void filesDropped (const juce::StringArray&, int, int) override;
+    void fileDragEnter (const juce::StringArray&, int, int) override  { fileDragHover = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override              { fileDragHover = false; repaint(); }
+
+    /** Imports a preset or a MIDI file (by extension); reports in the status line. */
+    void importFile (const juce::File&);
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -72,6 +99,10 @@ private:
     void showInstruments();
     void exportMidi();
     void togglePreview();
+    void showPresetsMenu();
+    void savePreset();
+    void exportPreset();
+    void chooseFileToImport();
     void showTakeMenu();
     void updateTakes();
     juce::String instrumentsText() const;
@@ -84,6 +115,7 @@ private:
     Theme::LookAndFeel lookAndFeel;
 
     // Header
+    IconButton presetsButton { "presets", Icons::Kind::Folder, "Presets" };
     juce::TextButton offlineButton { "Offline" }, claudeButton { "Claude AI" };
     IconButton settingsButton { "settings", Icons::Kind::Gear };
 
@@ -119,6 +151,7 @@ private:
     IconButton exportButton { "export", Icons::Kind::Export, "Export .mid" };
 
     std::unique_ptr<juce::FileChooser> chooser;
+    bool fileDragHover = false;
     juce::TooltipWindow tooltips { this, 500 };
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;

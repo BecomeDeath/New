@@ -1,4 +1,5 @@
 #include "RequestCheck.h"
+#include "Originality.h"
 #include "PromptInterpreter.h"
 
 #include <algorithm>
@@ -678,6 +679,14 @@ RequestReport checkRequest (const Composition& comp, const Request& req)
         const bool soft = req.loudness < 0;
         add (soft ? "Soft dynamics" : "Strong, loud dynamics", soft ? mean <= 84.0 : mean >= 78.0,
              "average velocity " + std::to_string ((int) std::lround (mean)));
+    }
+
+    // New music: no passage of a corpus melody (see Originality.h).
+    if (req.original && corpusSize() > 0)
+    {
+        const auto o = checkOriginality (comp);
+        add ("Original melody (not in the " + std::to_string (corpusSize()) + "-piece reference corpus)", o.original,
+             std::to_string (o.longestPassage) + " notes of " + o.track + " match a corpus melody");
     }
 
     return report;

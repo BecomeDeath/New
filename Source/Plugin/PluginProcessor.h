@@ -129,6 +129,16 @@ public:
     void auditionNote (int trackIndex, int pitch, int velocity);
     bool isPreviewPlaying() const                            { return previewPlaying.load(); }
 
+    /** Presets (.promptmidi files: the prompt, the controls and, when there is one, the piece with
+        its edits) and MIDI files from anywhere. Loading or importing makes a new take. */
+    juce::var presetToVar (const juce::String& name) const;
+    bool presetFromVar (const juce::var&, juce::String& error);
+    bool savePreset (const juce::File&, const juce::String& name) const;
+    bool loadPreset (const juce::File&, juce::String& error);
+    void loadFactoryPreset (int index);
+    bool importMidi (const juce::File&, juce::String& error);
+    bool isImportedPiece() const;
+
     /** The preview's sound (Settings): the built-in instruments, your SoundFont, or the sketch synth. */
     void previewSoundChanged();
     juce::String getPreviewSoundDescription() const          { return synth.getDescription(); }
@@ -180,6 +190,8 @@ private:
     };
 
     void storeTake();             // the state on screen -> takes[currentTake]
+    double overlapWithOtherTakes() const;   // the most of this take's melody found in another take (0-1)
+    static constexpr double maxTakeOverlap = 0.4;
     void resetTakes();            // one take: the state on screen
     std::vector<Take> takes;
     int currentTake = -1;

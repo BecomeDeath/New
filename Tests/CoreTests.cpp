@@ -5,6 +5,7 @@
 #include "PromptInterpreter.h"
 #include "QualityCheck.h"
 #include "RequestCheck.h"
+#include "Originality.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1284,6 +1285,79 @@ static void testRequests()
     }
 }
 
+static void testOriginality()
+{
+    std::printf ("originality: new tunes, never the corpus's\n");
+
+    // The fingerprints match the corpus tool's (Tools/corpus/build_originality_index.py).
+    {
+        std::vector<Note> line;
+        const int pitches[] = { 60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79 };
+
+        for (int i = 0; i < 12; ++i)
+            line.push_back ({ (i * 2 + i / 4) * 120, 200, pitches[i], 90 });
+
+        const auto moves = melodyMoves (line);
+        CHECK_EQ ((int) moves.size(), 1);
+        CHECK (moves[0] == std::vector<int> ({ 113, 113, 105, 114, 113, 113, 105, 114, 113, 105, 113 }));
+        CHECK_EQ (movesHash (moves[0].data(), 10), 0x2dfed88097c880eaull);
+        CHECK_EQ (movesHash (moves[0].data() + 1, 10), 0xc60f8ba859a02095ull);
+    }
+
+    // Copying is caught: index one piece's melodies, then check it (transposed) and another piece.
+    {
+        const auto a = compose (interpretPrompt ("Generate me a fantasy orchestral midi", 3), 3);
+        const auto b = compose (interpretPrompt ("Generate me a fantasy orchestral midi", 4), 4);
+        std::set<uint64_t> index;
+
+        for (auto& t : a.tracks)
+            if (! t.isDrum && (t.role == Role::Melody || t.role == Role::CounterMelody))
+                for (auto& phrase : melodyMoves (t.notes))
+                    for (int i = 0; i + 10 <= (int) phrase.size(); i += 3)   // a thinned index, like the winnowed one
+                        index.insert (movesHash (phrase.data() + i, 10));
+
+        auto has = [] (uint64_t h, const void* ctx) { return static_cast<const std::set<uint64_t>*> (ctx)->count (h) > 0; };
+        auto copy = a;
+
+        for (auto& t : copy.tracks)
+            for (auto& n : t.notes)
+                n.pitch += 3;   // another key
+
+        const auto caught = checkOriginality (copy, has, &index);
+        CHECK (! caught.original);
+        CHECK (caught.longestPassage >= 16);
+        CHECK (checkOriginality (b, has, &index).original);
+
+        // Takes: a piece shares everything with itself, little with another take.
+        CHECK (melodicOverlap (a, a) > 0.99);
+        CHECK (melodicOverlap (a, b) < 0.5);
+    }
+
+    // Against the real corpus index: every generation is original.
+    if (corpusSize() > 0)
+    {
+        const char* prompts[] = { "Generate me a fantasy orchestral midi", "Make me a soft piano midi", "Lo-fi hip hop beat",
+                                  "Late night jazz combo with a tenor sax lead", "80s synthwave night drive", "celtic tavern jig",
+                                  "Epic orchestral battle music for a boss fight", "sad piano ballad", "happy pop song", "country song" };
+        int checked = 0;
+
+        for (auto* p : prompts)
+            for (uint64_t seed : { 1ull, 2ull, 3ull, 4ull })
+            {
+                const auto c = compose (interpretPrompt (p, seed), seed);
+                const auto o = checkOriginality (c);
+
+                if (! o.original)
+                    std::printf ("  \"%s\" seed %d: %d notes of %s match the corpus\n", p, (int) seed, o.longestPassage, o.track.c_str());
+
+                CHECK (o.original);
+                ++checked;
+            }
+
+        CHECK_EQ (checked, 40);
+    }
+}
+
 int main()
 {
     testChordParsing();
@@ -1300,6 +1374,7 @@ int main()
     testVariationsDiffer();
     testCustomInstruments();
     testRequests();
+    testOriginality();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

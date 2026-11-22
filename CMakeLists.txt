@@ -24,6 +24,8 @@ add_library (promptmidi_core STATIC
     Source/Core/LearnedData.cpp
     Source/Core/MidiFileWriter.cpp
     Source/Core/MusicTheory.cpp
+    Source/Core/Originality.cpp
+    Source/Core/OriginalityData.cpp
     Source/Core/PromptInterpreter.cpp
     Source/Core/QualityCheck.cpp
     Source/Core/RequestCheck.cpp
@@ -120,6 +122,7 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         Source/Plugin/InstrumentPicker.cpp
         Source/Plugin/PluginEditor.cpp
         Source/Plugin/PluginProcessor.cpp
+        Source/Plugin/PresetIO.cpp
         Source/Plugin/PreviewEngine.cpp
         Source/Plugin/PreviewSynth.cpp
         Source/Plugin/Settings.cpp

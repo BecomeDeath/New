@@ -34,8 +34,15 @@ void MidiDragSource::mouseDrag (const juce::MouseEvent& e)
     const auto file = processor.writeMidiToTempFile (track);
 
     juce::Component::SafePointer<MidiDragSource> safe (this);
+    draggingOut = true;
     juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
-                                                               [safe] { if (safe != nullptr) safe->dragging = false; });
+                                                               [safe]
+                                                               {
+                                                                   draggingOut = false;
+
+                                                                   if (safe != nullptr)
+                                                                       safe->dragging = false;
+                                                               });
 }
 
 //==============================================================================
