@@ -11,8 +11,8 @@ through the Bloom filter - in the fingerprints of all the files. It reports, per
 file sharing the most runs with it and the longest stretch of that part covered by shared runs.
 
 A copied passage of 15 notes or more always shares at least one fingerprint (winnowing guarantees
-it); real copying shows up as many shared runs in a row. Isolated shared runs are idioms that many
-tunes contain.
+it); real copying shows up as many shared runs in a row. Runs found in more than MAX_FILES files,
+and runs of mostly repeated notes, are idioms and are not counted (as in the plug-in's check).
 """
 import collections
 import json
@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_originality_index import NGRAM, ioi_class, run_hash  # noqa: E402
+from build_originality_index import MAX_FILES, NGRAM, informative, ioi_class, run_hash  # noqa: E402
 
 PROMPTS = [
     "Generate me a fantasy orchestral midi", "Epic orchestral battle music for a boss fight", "Make me a soft piano midi",
@@ -56,7 +56,7 @@ def melody_runs(track):
         phrases.append(cur)
     runs = []
     for ph in phrases:
-        runs.append([run_hash(ph[i:i + NGRAM]) for i in range(len(ph) - NGRAM + 1)])
+        runs.append([run_hash(ph[i:i + NGRAM]) if informative(ph[i:i + NGRAM]) else None for i in range(len(ph) - NGRAM + 1)])
     return runs
 
 
@@ -73,7 +73,13 @@ def main():
     for i, name in enumerate(names):
         for h in every[name]:
             owners[h].append(i)
-    print(f"{len(names)} downloaded lead lines, {len(owners)} distinct fingerprints", flush=True)
+    total = len(owners)
+    # Runs found in many files are idioms (scales, common figures), not any one piece's identity.
+    common = [h for h, o in owners.items() if len(o) > MAX_FILES]
+    for h in common:
+        del owners[h]
+    print(f"{len(names)} downloaded lead lines, {total} distinct fingerprints, {len(owners)} found in at most {MAX_FILES} files",
+          flush=True)
 
     worst = []
     for k in range(pieces):
@@ -93,7 +99,7 @@ def main():
             offset = 0
             for runs in melody_runs(t):
                 for i, h in enumerate(runs):
-                    for owner in owners.get(h, ()):
+                    for owner in owners.get(h, ()) if h is not None else ():
                         per_file[owner].append(offset + i)
                 offset += len(runs) + NGRAM + 1
             for owner, positions in per_file.items():

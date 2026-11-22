@@ -92,10 +92,10 @@ PromptMIDI composes; it never retrieves. The reference corpus (the MIDI files li
 
 Every generation is checked as well:
 
-- **Against the corpus.** The melodies of the files the statistics were learned from are stored as fingerprints in a Bloom filter (`Source/Core/OriginalityData.cpp`, built by `Tools/corpus/build_originality_index.py`): runs of ten melodic moves (interval and rhythm), so a passage is recognised in any key or tempo. Common figures that turn up in many pieces (scales, repeated notes) don't count. If any melodic part of a draft matches several fingerprints close together, about 16 notes or more of a corpus melody, the draft fails the *Original melody* criterion and another is composed.
+- **Against the corpus.** The melodies of the files the statistics were learned from (24,462 usable lead lines) are stored as fingerprints in a Bloom filter (`Source/Core/OriginalityData.cpp`, 1.7 MB of hashed bits, built by `Tools/corpus/build_originality_index.py`): runs of ten melodic moves (interval and rhythm), so a passage is recognised in any key or tempo. Common figures don't count: runs found in more than 20 of the 136,982 downloaded lead lines (scales, stock figures; the threshold allows for the several versions of popular songs in the Lakh set), runs of mostly repeated notes, and runs that repeat one short cell (an ostinato). If three or more fingerprints of a melodic part turn up close together, the draft fails the *Original melody* criterion and another is composed. In tests the check catches 90% of whole corpus tunes played back to it (transposed), and flags none of PromptMIDI's own melodic parts.
 - **Against your other takes.** A Variation shares little of its melody with the takes before it; if one repeats more than 40% of an earlier take's melodic runs, PromptMIDI composes another (and shows *Different from your other takes*).
 
-`Tools/corpus/audit_originality.py` repeats the corpus check exactly (not through the filter) against every downloaded file for hundreds of generated pieces.
+`Tools/corpus/audit_originality.py` repeats the corpus check exactly (not through the filter) against every downloaded file. Run on 300 generations across 20 prompts, against all 136,982 usable lead lines of the 168,385 downloaded files: no melodic part shared more than 3 fingerprints with any one file, and no tune was among the closest matches (the closest was a 13-note half-note neighbour figure in a trombone accompaniment).
 
 ## Orchestral cues
 

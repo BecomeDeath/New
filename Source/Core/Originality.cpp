@@ -12,6 +12,34 @@ namespace
 {
     constexpr int kIoiClasses[] = { 1, 2, 3, 4, 6, 8, 12, 16 };
 
+    /** Runs of mostly repeated notes, or one short cell over and over (an ostinato), match many
+        pieces a little and identify none: they're skipped. */
+    constexpr int kMinPitchChanges = 4;
+
+    bool informative (const int* moves, int count)
+    {
+        int changes = 0;
+
+        for (int i = 0; i < count; ++i)
+            changes += moves[i] / 8 != 12 ? 1 : 0;
+
+        if (changes < kMinPitchChanges)
+            return false;
+
+        for (int period = 1; period <= 4; ++period)
+        {
+            bool repeats = true;
+
+            for (int i = period; i < count && repeats; ++i)
+                repeats = moves[i] == moves[i - period];
+
+            if (repeats)
+                return false;
+        }
+
+        return true;
+    }
+
     int ioiClass (int sixteenths)
     {
         int best = 0;
@@ -47,7 +75,7 @@ namespace
             for (auto& phrase : melodyMoves (t.notes))
             {
                 for (int i = 0; i + n <= (int) phrase.size(); ++i)
-                    if (has (movesHash (phrase.data() + i, n), context))
+                    if (informative (phrase.data() + i, n) && has (movesHash (phrase.data() + i, n), context))
                         hits.push_back (offset + i);
 
                 offset += (int) phrase.size() + n;   // never count across phrases

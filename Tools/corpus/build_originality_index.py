@@ -9,10 +9,17 @@ file the lead line is taken exactly as the learner takes it, then cut into overl
 NGRAM melodic moves. A move is the interval to the next note (in semitones, -12..12) and the time
 to it (a 16th-note class), so a passage is found whatever key or tempo it is played in.
 
-Runs that occur in many files ("up a scale in eighths") are common property and are dropped; the
+Runs that occur in many files ("up a scale in eighths") are common property and are dropped (the
+Lakh set holds several versions of popular songs, so "many" starts above MAX_FILES files); the
 rest - the runs that identify a particular piece - are winnowed (the smallest hash of every
 WINDOW consecutive runs is kept, which still catches any shared passage of NGRAM + WINDOW notes)
 and stored in a Bloom filter. Only the filter's bits are written out: no melody, note or piece.
+
+Checks (Originality.cpp, audit_originality.py) skip runs with fewer than MIN_CHANGES pitch changes
+and runs that repeat one cell of up to 4 moves (an ostinato): they match many pieces a little and
+identify none. A part counts as copied when
+3 or more of its runs within 24 are found in the index - in tests that catches about 9 in 10 whole
+corpus tunes (transposed) and none of PromptMIDI's own melodic parts.
 """
 import hashlib
 import json
@@ -27,7 +34,8 @@ from learn_from_midicaps import lead_line  # noqa: E402
 
 NGRAM = 10          # moves per run (11 notes)
 WINDOW = 5          # winnowing window
-MAX_FILES = 2       # runs found in more files than this are idioms, not identities
+MAX_FILES = 20      # runs found in more downloaded files than this are idioms, not identities
+MIN_CHANGES = 4     # checks skip runs with fewer pitch changes (repeated notes carry no melodic identity)
 BITS_PER_ENTRY = 14
 HASHES = 9
 
@@ -104,6 +112,16 @@ def analyse(path):
     for ph in hs:
         fps |= winnow(ph)
     return sorted(fps)
+
+
+def informative(run):
+    """Not mostly repeated notes, and not one short cell over and over (see Originality.cpp)."""
+    if sum(1 for t in run if t // 8 != 12) < MIN_CHANGES:
+        return False
+    for period in range(1, 5):
+        if all(run[i] == run[i - period] for i in range(period, len(run))):
+            return False
+    return True
 
 
 def bloom_positions(h, m):
