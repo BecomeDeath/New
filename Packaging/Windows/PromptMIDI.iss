@@ -260,7 +260,7 @@ begin
       Exit;
     end;
 
-    { {app} comes from the hidden standard folder page. }
+    // {app} comes from the hidden standard folder page.
     WizardForm.DirEdit.Text := Trim(FoldersPage.Values[RowApp]);
   end;
 end;

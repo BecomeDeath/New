@@ -88,6 +88,40 @@ jobs:
           & $iscc /Qp "/DAppVersion=${{ steps.version.outputs.version }}" "/DStage=$PWD\build\stage" "/O$PWD\dist" Packaging\Windows\PromptMIDI.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      # Pictures of the wizard's pages, to check its look (not a test).
+      - name: Screenshots of the installer (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          New-Item -ItemType Directory -Force shots | Out-Null
+          $shell = New-Object -ComObject WScript.Shell
+          $p = Start-Process "dist\PromptMIDI-Windows-Setup.exe" -PassThru
+          function Shot($name) {
+            Start-Sleep -Seconds 4
+            $shell.AppActivate("Setup - PromptMIDI") | Out-Null
+            Start-Sleep -Milliseconds 500
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $img = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($img)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $img.Save("shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          function Next { [System.Windows.Forms.SendKeys]::SendWait("{ENTER}") }
+          Shot "1-welcome";    Next
+          Shot "2-components"; Next
+          Shot "3-folders";    Next
+          Shot "4-ready"
+          Get-Process | Where-Object { $_.ProcessName -like "PromptMIDI-Windows-Setup*" } | Stop-Process -Force
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        with:
+          name: installer-screenshots
+          path: shots/*.png
+
       - name: Test the installer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -168,14 +202,16 @@ jobs:
           reset
 
           echo "== Only the VST3, in a chosen folder"
-          off() { printf '<dict><key>choiceIdentifier</key><string>%s</string><key>choiceAttribute</key><string>selected</string><key>attributeSetting</key><integer>0</integer></dict>' "$1"; }
-          {
-            echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><array>'
-            off au; off app; off readme
-            echo '<dict><key>choiceIdentifier</key><string>vst3</string><key>choiceAttribute</key><string>customLocation</string><key>attributeSetting</key><string>/Users/Shared/PromptMIDI-test/VST3</string></dict>'
-            echo '</array></plist>'
-          } > choices.plist
-          sudo installer -pkg dist/PromptMIDI-macOS.pkg -target / -applyChoiceChangesXML choices.plist
+          python3 - <<'EOF'
+          import plistlib
+          changes = [{"choiceIdentifier": c, "choiceAttribute": "selected", "attributeSetting": 0} for c in ("au", "app", "readme")]
+          changes.append({"choiceIdentifier": "vst3", "choiceAttribute": "customLocation", "attributeSetting": "/Users/Shared/PromptMIDI-test/VST3"})
+          with open("choices.plist", "wb") as f:
+              plistlib.dump(changes, f)
+          EOF
+          plutil -lint choices.plist
+          installer -pkg dist/PromptMIDI-macOS.pkg -showChoicesAfterApplyingChangesXML "$PWD/choices.plist" | head -80
+          sudo installer -pkg dist/PromptMIDI-macOS.pkg -target / -applyChoiceChangesXML "$PWD/choices.plist"
           expect yes /Users/Shared/PromptMIDI-test/VST3/PromptMIDI.vst3
           expect no /Library/Audio/Plug-Ins/VST3/PromptMIDI.vst3
           expect no /Library/Audio/Plug-Ins/Components/PromptMIDI.component
