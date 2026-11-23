@@ -48,6 +48,17 @@ public:
     juce::String getPreviewSound() const;
     void setPreviewSound (const juce::String&);
 
+    /** Updates: whether to look for a newer version when the window opens (default on), when it
+        last looked, the newest version it found, and a version the user chose to skip. */
+    bool getCheckForUpdates() const;
+    void setCheckForUpdates (bool);
+    juce::int64 getLastUpdateCheck() const;
+    void setLastUpdateCheck (juce::int64 millisecondsSinceEpoch);
+    juce::String getKnownRelease() const;            // the newest latest.json seen, as JSON
+    void setKnownRelease (const juce::String&);
+    juce::String getSkippedVersion() const;
+    void setSkippedVersion (const juce::String&);
+
     juce::File getFile() const;
 
     static constexpr const char* defaultModel = "claude-opus-5-5";

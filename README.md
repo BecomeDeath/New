@@ -125,19 +125,31 @@ Libraries differ, so check your library's articulation list and edit the eight n
 
 ## Download
 
-Every push builds Windows, macOS (Universal) and Linux binaries in GitHub Actions: open the **Actions** tab, select the latest **Build** run and download the `PromptMIDI-<OS>` artifact.
+Get the installer for your system from the [PromptMIDI page](https://becomedeath.github.io/TLComposer/promptmidi.html#download) or the [latest release](https://github.com/BecomeDeath/PromptMIDI/releases/latest):
 
-Install the plug-in by copying the whole `PromptMIDI.vst3` folder (it carries the preview's instrument sounds inside, in `Contents/Resources`) to:
+| OS | Installer | You choose |
+|---|---|---|
+| Windows 10/11 (64-bit) | `PromptMIDI-Windows-Setup.exe` | VST3, the standalone app, the ReadMe, and a folder for each |
+| macOS 11+ (Apple Silicon and Intel) | `PromptMIDI-macOS.pkg` | VST3, Audio Unit, the app, the ReadMe; *Customize* sets each one's location |
+| Linux (x86-64) | `PromptMIDI-Linux.tar.gz`, then `./install.sh` | the same, asked in the terminal (`--yes` for the defaults, `--help` for options) |
 
-| OS | VST3 folder |
-|---|---|
-| Windows | `C:\Program Files\Common Files\VST3\` |
-| macOS | `/Library/Audio/Plug-Ins/VST3/` (AU: `PromptMIDI.component` into `/Library/Audio/Plug-Ins/Components/`) |
-| Linux | `~/.vst3/` |
+The installers carry everything PromptMIDI needs: the plug-ins and app link their runtime statically, and the preview's instrument sounds are installed once (Windows `C:\ProgramData\PromptMIDI\Sounds`, macOS `/Library/Application Support/PromptMIDI/Sounds`, Linux `~/.local/share/PromptMIDI/Sounds`) and shared by every format. The default folders are the standard ones DAWs scan:
 
-On macOS the CI builds are only ad-hoc signed. If macOS blocks them, run `xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/VST3/PromptMIDI.vst3` (and the same for the `.component`).
+| OS | VST3 | Other |
+|---|---|---|
+| Windows | `C:\Program Files\Common Files\VST3\` | app in `C:\Program Files\PromptMIDI\` |
+| macOS | `/Library/Audio/Plug-Ins/VST3/` | AU in `/Library/Audio/Plug-Ins/Components/`, app in `/Applications/` |
+| Linux | `~/.vst3/` (`/usr/local/lib/vst3/` with `sudo`) | `promptmidi` in `~/.local/bin/`, plus an applications-menu entry |
 
-Then rescan plug-ins in your DAW. PromptMIDI shows up as an **instrument** (category *Instrument | Generator*).
+Then rescan plug-ins in your DAW. PromptMIDI shows up as an **instrument** (category *Instrument | Generator*). To uninstall: *Settings > Apps* on Windows, `~/.local/share/PromptMIDI/uninstall.sh` on Linux, and on macOS delete the files listed in the ReadMe.
+
+**Updates.** When a newer release exists, PromptMIDI shows *An update is available* at the top of its window, with a **Download** button for that system's installer (or **x** to skip that version). It checks at most twice a day by reading the release's public `latest.json`; nothing is sent. Turn it off under **Settings**.
+
+**Unsigned builds.** The installers aren't code-signed yet, so Windows SmartScreen says *Windows protected your PC* (click *More info > Run anyway*) and macOS says it can't check the package (open *System Settings > Privacy & Security* and click *Open Anyway*). See [Releases](#releases) for signing.
+
+**VST2.** Steinberg stopped licensing the VST2 SDK in 2018, so the official builds are VST3, AU and standalone. If you hold a VST2 licence and SDK, configure with `-DPROMPTMIDI_VST2_SDK=/path/to/VST2_SDK` and the installers gain a VST2 option.
+
+Every push also builds and tests the installers in GitHub Actions (the **Actions** tab, latest **Build** run, `PromptMIDI-<OS>` artifact).
 
 ## Using it in your DAW
 
@@ -194,7 +206,17 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Outputs are in `build/PromptMIDI_artefacts/Release/` (`VST3/`, `Standalone/` and `AU/` on macOS). The preview's SoundFont is copied into each bundle's `Contents/Resources` (and next to the app on Windows and Linux); the app also finds it in a `PromptMIDI.vst3` beside it or in an installed one, and in `PromptMIDI/Sounds` in your user application-data folder. To copy the VST3 into your system plug-in folder automatically, configure with `-DPROMPTMIDI_COPY_PLUGIN=ON`. To use an existing JUCE checkout instead of downloading one, add `-DPROMPTMIDI_JUCE_DIR=/path/to/JUCE`.
+Outputs are in `build/PromptMIDI_artefacts/Release/` (`VST3/`, `Standalone/` and `AU/` on macOS). The preview's SoundFont is copied into each bundle's `Contents/Resources` (and next to the app on Windows and Linux); the app also finds it in a `PromptMIDI.vst3` beside it or in an installed one, in the folder the installers share between formats, and in `PromptMIDI/Sounds` in your user application-data folder. To copy the VST3 into your system plug-in folder automatically, configure with `-DPROMPTMIDI_COPY_PLUGIN=ON`. To use an existing JUCE checkout instead of downloading one, add `-DPROMPTMIDI_JUCE_DIR=/path/to/JUCE`.
+
+### Installers and releases
+
+`Packaging/stage.sh` gathers a Release build into the layout the installers pack (taking the sounds out of the bundles, since they are installed once). Then:
+
+- **Windows:** `iscc /DAppVersion=1.0.0 /DStage=<stage dir> Packaging\Windows\PromptMIDI.iss` (Inno Setup 6.6+).
+- **macOS:** `Packaging/macOS/make_pkg.sh <stage dir> 1.0.0 PromptMIDI-macOS.pkg`.
+- **Linux:** pack the stage dir with `Packaging/Linux/install.sh` and `Packaging/Art/promptmidi-256.png` (as `promptmidi.png`); see the workflow.
+
+The artwork (`Packaging/Art`, `Resources/Icon`) is drawn by `python3 Tools/make_installer_art.py`.
 
 On Linux, first install the JUCE dependencies:
 
@@ -227,6 +249,13 @@ The engine alone has no dependencies. `-DPROMPTMIDI_BUILD_PLUGIN=OFF` builds jus
 
 `Tools/evaluate_orchestral.py` generates 20 orchestral game cues (`python3 Tools/evaluate_orchestral.py build/promptmidi-cli out/`). It measures each one against a checklist of what a professional score does: sections present, instrument ranges, strong-beat dissonance, low-register mud, outer-voice parallels, the theme's shape, form, length and dynamics, articulations, divisi, runs, swell-and-hit transitions, and thematic development (where the motif returns, fragmentation, imitation, reharmonised restatements). It prints a score per dimension, plus the original v1 checklist for comparison. The scores are heuristics that point at weaknesses; they are not a substitute for listening.
 
+## Releases
+
+1. Add a `## <version>` section at the top of [CHANGELOG.md](CHANGELOG.md) and set the same version in `CMakeLists.txt` (`project (PromptMIDI VERSION ...)`).
+2. Push a tag `v<version>`. The workflow builds and tests the three installers, then publishes a GitHub release with them and `latest.json` (version, the changelog's first lines, a download link per system). Copies already installed see it the next time their window opens.
+
+Signing is optional and set up outside the repository: with `MACOS_SIGN_IDENTITY` (a *Developer ID Application* identity) `stage.sh` signs the bundles, and `make_pkg.sh` signs the package with `PKG_SIGN_IDENTITY` (*Developer ID Installer*) and notarizes it with `NOTARY_PROFILE`. On Windows, sign `PromptMIDI-Windows-Setup.exe` with your code-signing certificate (Inno Setup's `SignTool`).
+
 ## Project layout
 
 ```
@@ -243,12 +272,14 @@ Source/Core/     Engine: plain C++17, no JUCE
   MidiFileWriter notes -> Standard MIDI File (markers, loop points, keyswitch / CC articulations)
 Source/Plugin/   JUCE plug-in: processor, editor, arrangement and note editor (Timeline), instrument picker,
                  presets and MIDI import (PresetIO), preview engine (SoundFont player and sketch synth),
-                 Claude client, JSON
+                 Claude client, JSON, update check (UpdateCheck)
 Resources/Fonts/ the Inter typeface (SIL Open Font License)
+Resources/Icon/  the app icon
 Resources/SoundFont/ GeneralUser GS, the preview's instruments (its licence alongside)
 ThirdParty/      TinySoundFont (MIT), which plays the SoundFont
 Tests/           unit tests and the VST3 host test
-Tools/           command-line generator, UI snapshot tool, evaluators, and corpus/ (the learning script)
+Tools/           command-line generator, UI snapshot tool, evaluators, installer artwork, and corpus/ (the learning script)
+Packaging/       installers: stage.sh, Windows (Inno Setup), macOS (.pkg), Linux (install.sh), ReadMe, artwork
 ```
 
 ## Credits and data

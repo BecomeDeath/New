@@ -2,6 +2,12 @@ cmake_minimum_required (VERSION 3.22)
 
 project (PromptMIDI VERSION 1.0.0 LANGUAGES C CXX)
 
+# The version shown in Settings and compared with the newest release (Source/Plugin/UpdateCheck.h).
+add_compile_definitions (PROMPTMIDI_VERSION="${PROJECT_VERSION}")
+
+# Windows: link the C++ runtime into the binaries, so nobody has to install a Visual C++ redistributable.
+set (CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set (CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -14,6 +20,8 @@ option (PROMPTMIDI_BUILD_PLUGIN "Build the JUCE plug-in (VST3 / Standalone / AU 
 option (PROMPTMIDI_BUILD_TESTS  "Build the unit tests and the command-line tool" ON)
 option (PROMPTMIDI_COPY_PLUGIN  "Copy the VST3 into the system plug-in folder after building" OFF)
 set (PROMPTMIDI_JUCE_DIR "" CACHE PATH "Use a local JUCE checkout instead of downloading it")
+set (PROMPTMIDI_VST2_SDK "" CACHE PATH
+     "Also build the VST2 plug-in: the folder that holds Steinberg's VST2 SDK (pluginterfaces/vst2.x). Needs a VST2 licence from Steinberg.")
 
 #===============================================================================
 # Engine: plain C++17, no JUCE, shared by the plug-in, the CLI and the tests.
@@ -70,9 +78,19 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         list (APPEND PROMPTMIDI_FORMATS AU)
     endif()
 
+    # VST2: Steinberg no longer hands out the VST2 SDK, and building VST2 plug-ins needs their
+    # licence, so it's only built when you point PROMPTMIDI_VST2_SDK at a copy you're licensed for.
+    if (PROMPTMIDI_VST2_SDK)
+        juce_set_vst2_sdk_path ("${PROMPTMIDI_VST2_SDK}")
+        list (APPEND PROMPTMIDI_FORMATS VST)
+    endif()
+
     juce_add_plugin (PromptMIDI
         COMPANY_NAME                "PromptMIDI"
-        COMPANY_WEBSITE             "https://github.com/BecomeDeath/New"
+        COMPANY_WEBSITE             "https://becomedeath.github.io/TLComposer/promptmidi.html"
+        COMPANY_COPYRIGHT           "PromptMIDI"
+        ICON_BIG                    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Icon/PromptMIDI.png"
+        VERSION                     "${PROJECT_VERSION}"
         BUNDLE_ID                   "com.promptmidi.promptmidi"
         PLUGIN_MANUFACTURER_CODE    Pmdi
         PLUGIN_CODE                 Pmd1
@@ -127,7 +145,8 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         Source/Plugin/PreviewSynth.cpp
         Source/Plugin/Settings.cpp
         Source/Plugin/SpecJson.cpp
-        Source/Plugin/Timeline.cpp)
+        Source/Plugin/Timeline.cpp
+        Source/Plugin/UpdateCheck.cpp)
 
     target_sources (PromptMIDI PRIVATE ${PROMPTMIDI_PLUGIN_SOURCES})
 
@@ -169,10 +188,19 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         promptmidi_copy_soundfont (PromptMIDI_Standalone "$<TARGET_FILE_DIR:PromptMIDI_Standalone>")
     endif()
 
+    if (TARGET PromptMIDI_VST)
+        if (APPLE)
+            get_target_property (PROMPTMIDI_VST2_BUNDLE PromptMIDI_VST JUCE_PLUGIN_ARTEFACT_FILE)
+            promptmidi_copy_soundfont (PromptMIDI_VST "${PROMPTMIDI_VST2_BUNDLE}/Contents/Resources")
+        else()
+            promptmidi_copy_soundfont (PromptMIDI_VST "$<TARGET_FILE_DIR:PromptMIDI_VST>")
+        endif()
+    endif()
+
     # Headless tests for the JSON / Claude request code (only needs juce_core).
     if (PROMPTMIDI_BUILD_TESTS)
         juce_add_console_app (promptmidi_json_tests PRODUCT_NAME "promptmidi_json_tests" NEEDS_CURL TRUE)
-        target_sources (promptmidi_json_tests PRIVATE Tests/JsonTests.cpp Source/Plugin/SpecJson.cpp Source/Plugin/ClaudeClient.cpp)
+        target_sources (promptmidi_json_tests PRIVATE Tests/JsonTests.cpp Source/Plugin/SpecJson.cpp Source/Plugin/ClaudeClient.cpp Source/Plugin/UpdateCheck.cpp)
         target_include_directories (promptmidi_json_tests PRIVATE Source/Plugin)
         target_compile_definitions (promptmidi_json_tests PRIVATE JUCE_WEB_BROWSER=0 JUCE_STANDALONE_APPLICATION=1)
         target_link_libraries (promptmidi_json_tests PRIVATE promptmidi_core juce::juce_core juce::juce_events

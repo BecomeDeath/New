@@ -41,8 +41,15 @@ public:
     bool waitUntilLoaded (int timeoutMs);
 
     /** The bundled bank: inside the plug-in bundle (Contents/Resources), next to the app, in an
-        installed PromptMIDI.vst3 nearby, or in the user folder below. */
+        installed PromptMIDI.vst3 nearby, in the folder the installers share between the formats,
+        or in the user folder below. */
     static juce::File findBuiltInSoundFont();
+
+    /** Where the installers put the instrument sounds, once for every format:
+        Windows  C:\ProgramData\PromptMIDI\Sounds
+        macOS    /Library/Application Support/PromptMIDI/Sounds (or the same under ~)
+        Linux    ~/.local/share/PromptMIDI/Sounds, /usr/local/share/..., /usr/share/... */
+    static juce::Array<juce::File> installedSoundFontFolders();
 
     /** <user application data>/PromptMIDI/Sounds - SoundFonts placed here are found too. */
     static juce::File userSoundFontFolder();

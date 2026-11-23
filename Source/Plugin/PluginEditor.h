@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "Theme.h"
 #include "Timeline.h"
+#include "UpdateCheck.h"
 
 //==============================================================================
 /** The "Drag MIDI into your DAW" target in the footer (all tracks that aren't muted). */
@@ -17,6 +18,25 @@ public:
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
+};
+
+/** "PromptMIDI 1.2.0 is available" in the header, with Download and a button to skip that version. */
+class UpdateBanner : public juce::Component,
+                     public juce::SettableTooltipClient
+{
+public:
+    UpdateBanner();
+    void show (const updates::Release&);
+    const updates::Release& getRelease() const  { return release; }
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    std::function<void()> onDownload, onSkip;
+
+private:
+    updates::Release release;
+    juce::TextButton downloadButton { "Download" };
+    IconButton skipButton { "skip this version", Icons::Kind::Cross };
 };
 
 /** Settings shown in a call-out: Claude (API key, model, effort), the preview's sound and MIDI
@@ -39,6 +59,8 @@ private:
     juce::TextEditor valuesEditor, controllerEditor;
     juce::String articulationOutputFor (int id) const;
     juce::TextButton saveButton { "Save" }, clearButton { "Remove key" };
+    juce::ToggleButton updatesToggle { "Tell me when an update is available" };
+    juce::Label versionLabel;
 
     juce::Label soundHeading, soundNote;
     juce::ComboBox soundBox;
@@ -110,6 +132,8 @@ private:
     void pushControls();
     void pullControls();
     void setStatusText (const juce::String&, juce::Colour);
+    void startUpdateCheck();
+    void showKnownUpdate();
 
     PromptMidiProcessor& processor;
     Theme::LookAndFeel lookAndFeel;
@@ -165,6 +189,11 @@ private:
     bool audioHintShown = false;
     int shownVersion = -1, shownPiece = -1;
     bool updatingControls = false;
+
+    // "An update is available" (the checker is last, so it's cancelled before anything it calls back into goes away).
+    UpdateBanner updateBanner;
+    bool updateCheckStarted = false;
+    updates::Checker updateChecker;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PromptMidiEditor)
 };
