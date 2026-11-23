@@ -190,7 +190,8 @@ jobs:
           Shot "1-welcome" $true;    Next
           Shot "2-components" $true; Next
           Shot "3-folders" $true;    Next
-          Shot "4-ready" $false
+          Shot "4-tasks" $false;     Next
+          Shot "5-ready" $false
           Get-Process | Where-Object { $_.ProcessName -like "PromptMIDI-Windows-Setup*" } | Stop-Process -Force
 
       - uses: actions/upload-artifact@v4
