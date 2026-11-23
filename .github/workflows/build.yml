@@ -342,9 +342,18 @@ jobs:
           print(json.dumps(manifest, indent=2))
           EOF
 
+      # Works both ways: a tag pushed with git (the release is made here), or a release published
+      # on GitHub's Releases page (which makes the tag; the installers are added to it here).
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "PromptMIDI ${GITHUB_REF_NAME#v}" --notes-file notes.md \
-            dist/PromptMIDI-Windows-Setup.exe dist/PromptMIDI-macOS.pkg dist/PromptMIDI-Linux.tar.gz dist/latest.json
+          set -euo pipefail
+          files=(dist/PromptMIDI-Windows-Setup.exe dist/PromptMIDI-macOS.pkg dist/PromptMIDI-Linux.tar.gz dist/latest.json)
+          title="PromptMIDI ${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "$title" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$title" --notes-file notes.md "${files[@]}"
+          fi

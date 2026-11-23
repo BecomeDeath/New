@@ -252,7 +252,7 @@ The engine alone has no dependencies. `-DPROMPTMIDI_BUILD_PLUGIN=OFF` builds jus
 ## Releases
 
 1. Add a `## <version>` section at the top of [CHANGELOG.md](CHANGELOG.md) and set the same version in `CMakeLists.txt` (`project (PromptMIDI VERSION ...)`).
-2. Push a tag `v<version>`. The workflow builds and tests the three installers, then publishes a GitHub release with them and `latest.json` (version, the changelog's first lines, a download link per system). Copies already installed see it the next time their window opens.
+2. Push a tag `v<version>` (`git tag v1.0.0 && git push origin v1.0.0`), or publish a release with that tag on GitHub's *Releases* page. The workflow builds and tests the three installers, then attaches them and `latest.json` (version, the changelog's first lines, a download link per system) to the release, with the changelog section as its notes. Copies already installed see it the next time their window opens.
 
 Signing is optional and set up outside the repository: with `MACOS_SIGN_IDENTITY` (a *Developer ID Application* identity) `stage.sh` signs the bundles, and `make_pkg.sh` signs the package with `PKG_SIGN_IDENTITY` (*Developer ID Installer*) and notarizes it with `NOTARY_PROFILE`. On Windows, sign `PromptMIDI-Windows-Setup.exe` with your code-signing certificate (Inno Setup's `SignTool`).
 
