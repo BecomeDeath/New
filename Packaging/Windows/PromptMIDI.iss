@@ -71,7 +71,7 @@ WizardSmallImageBackColor=none
 
 [Messages]
 WelcomeLabel1=Welcome to PromptMIDI
-WelcomeLabel2=Describe the music in words, get multi-track MIDI.%n%nThis installs PromptMIDI [name/ver]. On the next pages you choose which parts to install (the VST3 plug-in, the standalone app and the ReadMe) and where each one goes.%n%nIf your DAW is open, close it before you continue.
+WelcomeLabel2=Describe the music in words, get multi-track MIDI.%n%nThis installs [name/ver]. On the next pages you choose which parts to install (the VST3 plug-in, the standalone app and the ReadMe) and where each one goes.%n%nIf your DAW is open, close it before you continue.
 SelectComponentsDesc=Tick the parts you want.
 SelectComponentsLabel2=Tick what you want to install, then click Next. Everything you install shares one copy of the instrument sounds.
 SelectTasksDesc=One more choice.
