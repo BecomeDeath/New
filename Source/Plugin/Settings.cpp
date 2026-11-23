@@ -89,6 +89,62 @@ void Settings::setPreviewSound (const juce::String& sound)
     }
 }
 
+bool Settings::getCheckForUpdates() const
+{
+    return props() == nullptr || props()->getBoolValue ("checkForUpdates", true);
+}
+
+void Settings::setCheckForUpdates (bool on)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("checkForUpdates", on);
+        p->saveIfNeeded();
+    }
+}
+
+juce::int64 Settings::getLastUpdateCheck() const
+{
+    return props() != nullptr ? props()->getValue ("lastUpdateCheck").getLargeIntValue() : 0;
+}
+
+void Settings::setLastUpdateCheck (juce::int64 when)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("lastUpdateCheck", juce::String (when));
+        p->saveIfNeeded();
+    }
+}
+
+juce::String Settings::getKnownRelease() const
+{
+    return props() != nullptr ? props()->getValue ("knownRelease") : juce::String();
+}
+
+void Settings::setKnownRelease (const juce::String& json)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("knownRelease", json);
+        p->saveIfNeeded();
+    }
+}
+
+juce::String Settings::getSkippedVersion() const
+{
+    return props() != nullptr ? props()->getValue ("skippedVersion").trim() : juce::String();
+}
+
+void Settings::setSkippedVersion (const juce::String& version)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("skippedVersion", version.trim());
+        p->saveIfNeeded();
+    }
+}
+
 juce::String Settings::getArticulationOutput() const
 {
     const auto o = props() != nullptr ? props()->getValue ("articulationOutput").trim().toLowerCase() : juce::String();

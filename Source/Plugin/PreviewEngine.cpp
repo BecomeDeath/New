@@ -63,6 +63,24 @@ juce::File SoundBank::userSoundFontFolder()
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("PromptMIDI").getChildFile ("Sounds");
 }
 
+juce::Array<juce::File> SoundBank::installedSoundFontFolders()
+{
+    juce::Array<juce::File> folders;
+
+   #if JUCE_WINDOWS
+    folders.add (juce::File::getSpecialLocation (juce::File::commonApplicationDataDirectory).getChildFile ("PromptMIDI/Sounds"));
+   #elif JUCE_MAC
+    folders.add (juce::File ("/Library/Application Support/PromptMIDI/Sounds"));
+    folders.add (juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Library/Application Support/PromptMIDI/Sounds"));
+   #else
+    folders.add (juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile (".local/share/PromptMIDI/Sounds"));
+    folders.add (juce::File ("/usr/local/share/PromptMIDI/Sounds"));
+    folders.add (juce::File ("/usr/share/PromptMIDI/Sounds"));
+   #endif
+
+    return folders;
+}
+
 juce::File SoundBank::findBuiltInSoundFont()
 {
     const auto binary = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
@@ -89,6 +107,7 @@ juce::File SoundBank::findBuiltInSoundFont()
     places.add (juce::File ("/usr/lib/vst3/PromptMIDI.vst3/Contents/Resources"));
    #endif
 
+    places.addArray (installedSoundFontFolders());                              // where the installers put it
     places.add (userSoundFontFolder());
 
     for (auto& place : places)

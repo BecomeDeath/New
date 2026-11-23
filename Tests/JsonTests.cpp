@@ -7,6 +7,7 @@
 #include "MidiFileWriter.h"
 #include "PromptInterpreter.h"
 #include "SpecJson.h"
+#include "UpdateCheck.h"
 
 #include <cstdio>
 
@@ -87,6 +88,31 @@ static juce::String successBody (const juce::String& planJson)
 
 int main()
 {
+    std::printf ("updates\n");
+    {
+        using namespace updates;
+        CHECK (compareVersions ("1.10.0", "1.9.2") == 1);
+        CHECK (compareVersions ("v1.0", "1.0.0") == 0);
+        CHECK (compareVersions ("1.0.0", "1.0.1") == -1);
+        CHECK (compareVersions ("1.2.0-beta", "1.2.0") == 0);
+        CHECK (compareVersions ("2", "1.99.99") == 1);
+
+        const juce::String json = R"({"version":"v9.4.1","notes":"Faster preview.","page":"https://example.com/download",
+                                      "downloads":{"windows":"https://example.com/a.exe","macos":"http://example.com/b.pkg","linux":"https://example.com/c.tar.gz"}})";
+        const auto win = parseManifest (json, "windows");
+        CHECK (win.version == "9.4.1" && win.notes == "Faster preview." && win.download == "https://example.com/a.exe");
+        CHECK (parseManifest (json, "macos").download.isEmpty());          // not https: never opened
+        CHECK (parseManifest (json, "linux").page == "https://example.com/download");
+        CHECK (! parseManifest ("not json", "windows").isValid());
+        CHECK (! parseManifest (R"({"version":"latest"})", "windows").isValid());
+        CHECK (! parseManifest (R"({"tag":"1.0.0"})", "windows").isValid());
+
+        Release newer; newer.version = "999.0.0";
+        Release older; older.version = "0.0.1";
+        CHECK (newer.isNewer() && ! older.isNewer());
+        CHECK (currentVersion().isNotEmpty() && currentVersion() != "0.0.0");
+    }
+
     std::printf ("schema\n");
     {
         const auto schema = SpecJson::outputSchema();

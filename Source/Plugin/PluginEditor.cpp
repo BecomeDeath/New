@@ -91,6 +91,52 @@ void DragAllArea::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+UpdateBanner::UpdateBanner()
+{
+    downloadButton.setColour (juce::TextButton::buttonColourId, Theme::accent);
+    downloadButton.setTooltip ("Opens the download in your browser. Run the installer to update; your settings and presets stay.");
+    downloadButton.onClick = [this] { if (onDownload) onDownload(); };
+    skipButton.setFlat (true);
+    skipButton.setTooltip ("Skip this version (you'll hear about the next one)");
+    skipButton.onClick = [this] { if (onSkip) onSkip(); };
+    addAndMakeVisible (downloadButton);
+    addAndMakeVisible (skipButton);
+}
+
+void UpdateBanner::show (const updates::Release& r)
+{
+    release = r;
+    setTooltip (r.notes.isNotEmpty() ? "What's new: " + r.notes : juce::String());
+    setVisible (true);
+    repaint();
+}
+
+void UpdateBanner::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (Theme::accent.withAlpha (0.14f));
+    g.fillRoundedRectangle (r, r.getHeight() / 2);
+    g.setColour (Theme::accent.withAlpha (0.55f));
+    g.drawRoundedRectangle (r, r.getHeight() / 2, 1.0f);
+
+    auto text = getLocalBounds().withTrimmedLeft (14).withTrimmedRight (downloadButton.getWidth() + skipButton.getWidth() + 18);
+    g.setColour (Theme::accentHot);
+    g.fillEllipse ((float) text.getX(), (float) text.getCentreY() - 3.0f, 6.0f, 6.0f);
+    text.removeFromLeft (14);
+    g.setColour (Theme::text);
+    g.setFont (Theme::font (13.0f, Theme::Weight::Medium));
+    g.drawFittedText ("An update is available: " + release.version, text, juce::Justification::centredLeft, 1, 0.9f);
+}
+
+void UpdateBanner::resized()
+{
+    auto r = getLocalBounds().reduced (3);
+    skipButton.setBounds (r.removeFromRight (r.getHeight()));
+    r.removeFromRight (4);
+    downloadButton.setBounds (r.removeFromRight (92));
+}
+
+//==============================================================================
 SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settings (s), onSaved (std::move (saved))
 {
     styleLabel (heading, 16.0f, Theme::text, true);
@@ -264,6 +310,16 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
     for (auto* c : std::initializer_list<juce::Component*> { &soundHeading, &soundNote, &soundBox })
         addAndMakeVisible (c);
 
+    // Updates: on by default; the version this is, top right.
+    updatesToggle.setToggleState (settings.getCheckForUpdates(), juce::dontSendNotification);
+    updatesToggle.setTooltip ("When the window opens, PromptMIDI looks (at most twice a day) for a newer version on its download page. Nothing about you is sent.");
+    updatesToggle.onClick = [this] { settings.setCheckForUpdates (updatesToggle.getToggleState()); };
+    styleLabel (versionLabel, 12.0f, Theme::textDim);
+    versionLabel.setJustificationType (juce::Justification::centredRight);
+    versionLabel.setText ("PromptMIDI " + updates::currentVersion(), juce::dontSendNotification);
+    addAndMakeVisible (updatesToggle);
+    addAndMakeVisible (versionLabel);
+
     for (auto* c : std::initializer_list<juce::Component*> { &heading, &keyLabel, &modelLabel, &effortLabel, &note,
                                                              &keyEditor, &modelEditor, &effortBox, &saveButton, &clearButton,
                                                              &exportHeading, &articulationLabel, &valuesLabel, &controllerLabel,
@@ -304,7 +360,9 @@ void SettingsPanel::paint (juce::Graphics& g)
 void SettingsPanel::resized()
 {
     auto r = getLocalBounds().reduced (16);
-    heading.setBounds (r.removeFromTop (26));
+    auto top = r.removeFromTop (26);
+    versionLabel.setBounds (top.removeFromRight (160));
+    heading.setBounds (top);
     r.removeFromTop (6);
 
     keyLabel.setBounds (r.removeFromTop (20));
@@ -323,7 +381,10 @@ void SettingsPanel::resized()
     effortBox.setBounds (row);
     r.removeFromTop (10);
 
-    saveButton.setBounds (r.removeFromBottom (32).removeFromRight (110));
+    auto bottom = r.removeFromBottom (32);
+    saveButton.setBounds (bottom.removeFromRight (110));
+    bottom.removeFromRight (12);
+    updatesToggle.setBounds (bottom);
     r.removeFromBottom (6);
 
     // MIDI export, from the bottom up
@@ -641,6 +702,21 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     soundAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "previewSound", soundButton);
     volumeAttachment   = std::make_unique<SliderAttachment> (processor.parameters, "previewVolume", volumeSlider);
 
+    // An update notice in the header; the check runs once the window is on screen (timerCallback).
+    addChildComponent (updateBanner);
+    updateBanner.onDownload = [this]
+    {
+        const auto& r = updateBanner.getRelease();
+        juce::URL (r.download.isNotEmpty() ? r.download : (r.page.isNotEmpty() ? r.page : juce::String (updates::downloadPage))).launchInDefaultBrowser();
+    };
+    updateBanner.onSkip = [this]
+    {
+        processor.settings->setSkippedVersion (updateBanner.getRelease().version);
+        updateBanner.setVisible (false);
+        repaint();
+    };
+    showKnownUpdate();
+
     processor.addChangeListener (this);
 
     setResizable (true, true);
@@ -679,9 +755,14 @@ void PromptMidiEditor::paint (juce::Graphics& g)
     g.setColour (Theme::text);
     g.setFont (Theme::font (19.0f, Theme::Weight::SemiBold));
     g.drawText ("PromptMIDI", header.removeFromLeft (120), juce::Justification::centredLeft);
-    g.setColour (Theme::textDim);
-    g.setFont (Theme::font (13.0f));
-    g.drawText ("Describe it. Get MIDI.", header.removeFromLeft (220), juce::Justification::centredLeft);
+    const auto tagline = header.removeFromLeft (220);
+
+    if (! updateBanner.isVisible() || ! updateBanner.getBounds().intersects (tagline))
+    {
+        g.setColour (Theme::textDim);
+        g.setFont (Theme::font (13.0f));
+        g.drawText ("Describe it. Get MIDI.", tagline, juce::Justification::centredLeft);
+    }
 
     g.setColour (Theme::outline);
     g.drawHorizontalLine (56, 0.0f, (float) getWidth());
@@ -720,6 +801,15 @@ void PromptMidiEditor::resized()
     offlineButton.setBounds (header.removeFromRight (88));
     header.removeFromRight (12);
     presetsButton.setBounds (header.removeFromRight (108));
+
+    // The update notice sits between the name and the buttons (over the tagline if it must).
+    if (updateBanner.isVisible())
+    {
+        auto slot = header.withLeft (juce::jmax (header.getX(), pad + 162));
+        slot.removeFromRight (16);
+        const int w = juce::jmin (420, slot.getWidth());
+        updateBanner.setBounds (slot.removeFromRight (w).withSizeKeepingCentre (w, 32));
+    }
 
     // Footer
     auto footer = r.removeFromBottom (64).reduced (pad, 12);
@@ -1095,6 +1185,52 @@ void PromptMidiEditor::changeListenerCallback (juce::ChangeBroadcaster*)
     refreshFromProcessor();
 }
 
+void PromptMidiEditor::showKnownUpdate()
+{
+    const auto r = updates::parseManifest (processor.settings->getKnownRelease());
+
+    if (r.isNewer() && r.version != processor.settings->getSkippedVersion())
+        updateBanner.show (r);
+    else
+        updateBanner.setVisible (false);
+
+    resized();
+    repaint();
+}
+
+void PromptMidiEditor::startUpdateCheck()
+{
+    // What an earlier check found shows straight away; a new check runs at most twice a day.
+    showKnownUpdate();
+    auto& settings = *processor.settings;
+
+    if (! settings.getCheckForUpdates() || juce::SystemStats::getEnvironmentVariable ("PROMPTMIDI_NO_UPDATE_CHECK", {}).isNotEmpty())
+        return;
+
+    const auto now = juce::Time::currentTimeMillis();
+
+    if (now - settings.getLastUpdateCheck() < 12LL * 60 * 60 * 1000)
+        return;
+
+    updateChecker.start ([this, now] (const updates::Release& r)
+    {
+        if (! r.isValid())
+            return;   // offline, or no release yet: try again next time
+
+        auto* downloads = new juce::DynamicObject();
+        downloads->setProperty (juce::Identifier (updates::platformKey()), r.download);
+        auto* known = new juce::DynamicObject();
+        known->setProperty ("version", r.version);
+        known->setProperty ("notes", r.notes);
+        known->setProperty ("page", r.page);
+        known->setProperty ("downloads", juce::var (downloads));
+
+        processor.settings->setKnownRelease (juce::JSON::toString (juce::var (known), true));
+        processor.settings->setLastUpdateCheck (now);
+        showKnownUpdate();
+    });
+}
+
 void PromptMidiEditor::setStatusText (const juce::String& text, juce::Colour colour)
 {
     statusLabel.setText (text, juce::dontSendNotification);
@@ -1217,6 +1353,12 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
+    if (! updateCheckStarted && isShowing())
+    {
+        updateCheckStarted = true;
+        startUpdateCheck();
+    }
+
     if (const auto sound = processor.getPreviewSoundDescription(); sound != shownSound)
     {
         shownSound = sound;

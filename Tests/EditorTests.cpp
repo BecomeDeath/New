@@ -10,6 +10,8 @@
 #include "Timeline.h"
 
 #include <cstdio>
+#include <tuple>
+#include <vector>
 
 static int failures = 0, checks = 0;
 
@@ -275,11 +277,20 @@ int main()
         CHECK (m.getComposition().keyRoot == a.getComposition().keyRoot);
         CHECK (m.isImportedPiece());
 
-        // Variation on an imported piece: new music for the same instruments.
-        const auto importedNotes = m.getComposition().noteCount();
+        // Variation on an imported piece: new music for the same instruments. (Compares the notes
+        // themselves: a new piece can happen to have the same number of notes.)
+        const auto notesOf = [] (const pm::Composition& c)
+        {
+            std::vector<std::tuple<int, int, int>> all;
+            for (const auto& t : c.tracks)
+                for (const auto& n : t.notes)
+                    all.emplace_back (n.start, n.pitch, n.length);
+            return all;
+        };
+        const auto imported = notesOf (m.getComposition());
         m.makeVariation();
         CHECK (! m.isImportedPiece() && m.hasComposition());
-        CHECK (m.getComposition().noteCount() != importedNotes);
+        CHECK (notesOf (m.getComposition()) != imported);
 
         // Not MIDI.
         const auto text = dir.getChildFile ("notes.mid");
