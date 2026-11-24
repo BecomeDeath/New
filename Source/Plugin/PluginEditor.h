@@ -9,6 +9,8 @@
 #include "ThinkingPanel.h"
 #include "Timeline.h"
 #include "UpdateCheck.h"
+#include "UpdateDialog.h"
+#include "Updater.h"
 
 //==============================================================================
 /** The "Drag MIDI into your DAW" target in the footer (all tracks that aren't muted). */
@@ -29,6 +31,8 @@ public:
     UpdateBanner();
     void show (const updates::Release&);
     const updates::Release& getRelease() const  { return release; }
+    /** While updating in the background: "Updating to 1.2.0: 38%" (empty = the offer). */
+    void setProgress (const juce::String&);
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -36,7 +40,8 @@ public:
 
 private:
     updates::Release release;
-    juce::TextButton downloadButton { "Download" };
+    juce::String progress;
+    juce::TextButton downloadButton { "Update" };
     IconButton skipButton { "skip this version", Icons::Kind::Cross };
 };
 
@@ -198,6 +203,14 @@ private:
     // "An update is available" (the checker is last, so it's cancelled before anything it calls back into goes away).
     UpdateBanner updateBanner;
     bool updateCheckStarted = false;
+    UpdateDialog updateDialog;                      // "an update is available", in the middle; updating happens there
+    juce::SharedResourcePointer<Updater> updater;   // one for every PromptMIDI window in this process
+    bool quitRequested = false;
+    bool updateDialogHidden = false;               // hidden while it downloads; back when it needs you
+    void offerUpdate (const updates::Release&);
+    void openUpdateDialog();
+    void followUpdater();
+    juce::String updateHint (bool inApp) const;
     updates::Checker updateChecker;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PromptMidiEditor)
