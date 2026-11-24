@@ -121,12 +121,14 @@ static int unitTests()
         CHECK (plan.args.contains ("--no-app") && plan.args.contains ("--no-vst2") && ! plan.args.contains ("--no-readme"));
         data.deleteRecursively();
 
+       #if ! JUCE_WINDOWS   // (Unix paths: not absolute on Windows)
         const juce::StringArray system { "/opt/x/vst3/PromptMIDI.vst3", "/usr/local/bin/promptmidi" };
         const auto everyone = Updater::linuxInstallFor (system, juce::File ("/usr/local/share/PromptMIDI"));
         CHECK (everyone.ok && everyone.systemWide);
         CHECK (everyone.args.contains ("--app-dir") && everyone.args.contains ("/usr/local/bin") && everyone.args.contains ("--no-readme"));
 
         CHECK (! Updater::linuxInstallFor ({ "/somewhere/else.txt" }, data).ok);
+       #endif
     }
 
     std::printf ("download and verify\n");
