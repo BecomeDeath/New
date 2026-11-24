@@ -46,6 +46,19 @@ PromptMIDI only makes sound while you press Play inside it. It is silent while y
 plays, so after dragging the MIDI out you only hear your own instruments.
 
 
+THINKING
+--------
+
+When you press Generate, PromptMIDI thinks before it answers: it reads your prompt into
+several plans, writes hundreds of drafts, develops the most promising and keeps the one that
+meets everything you asked for and is judged best (melody, harmony, balance, mood, shape).
+A panel shows each stage with a timer; "Use best so far" stops early, Cancel keeps the take
+you had. Hover over the verdict under the title to see how a take was chosen.
+
+Settings > Thinking: Quick (instant), Thorough (the default, about a second) or Deep (a few
+seconds, longer for long orchestral cues).
+
+
 UPDATES
 -------
 

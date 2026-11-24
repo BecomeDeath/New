@@ -6,6 +6,8 @@
 #include "QualityCheck.h"
 #include "RequestCheck.h"
 #include "Originality.h"
+#include "Judge.h"
+#include "Thinking.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1358,6 +1360,146 @@ static void testOriginality()
     }
 }
 
+//==============================================================================
+static void testThinking()
+{
+    std::printf ("thinking before it answers\n");
+
+    auto request = [] (const std::string& prompt, uint64_t seed, ThinkingDepth depth)
+    {
+        ThinkingRequest r;
+        r.seed = seed;
+        r.depth = depth;
+        r.makePlan = [prompt, seed] (int i)
+        {
+            ThinkingPlan p;
+            p.planSeed = planSeedFor (seed, i);
+            p.spec = interpretPrompt (prompt, p.planSeed);
+            return p;
+        };
+        r.varyPlan = [] (const ThinkingPlan& base, uint64_t v)
+        {
+            auto p = base;
+            p.variationSeed = v;
+            p.spec = varySpec (base.spec, v);
+            return p;
+        };
+        return r;
+    };
+
+    auto notesOf = [] (const Composition& c)
+    {
+        std::vector<int> all;
+        for (auto& t : c.tracks)
+            for (auto& n : t.notes)
+            {
+                all.push_back (n.start);
+                all.push_back (n.pitch);
+                all.push_back (n.length);
+            }
+        return all;
+    };
+
+    // Budgets grow with the depth.
+    CHECK (budgetFor (ThinkingDepth::Quick).totalDrafts() == 1);
+    CHECK (budgetFor (ThinkingDepth::Thorough).totalDrafts() > 200);
+    CHECK (budgetFor (ThinkingDepth::Deep).totalDrafts() > budgetFor (ThinkingDepth::Thorough).totalDrafts());
+
+    for (const char* prompt : { "Make me a soft piano midi", "jazz piano trio", "Generate me a fantasy orchestral midi" })
+    {
+        // Quick is exactly the instant answer: the first reading, composed with the seed.
+        const auto quick = think (request (prompt, 21, ThinkingDepth::Quick));
+        const auto plan0 = interpretPrompt (prompt, 21);
+        CHECK (quick.ok && quick.drafts == 1);
+        CHECK (notesOf (quick.composition) == notesOf (compose (plan0, 21)));
+
+        // Thorough: many drafts over several plans; never worse than Quick by the judge; meets the request.
+        int stages = 0, lastStage = -1, lastDrafts = 0;
+        bool monotonic = true;
+        auto r = request (prompt, 21, ThinkingDepth::Thorough);
+        r.onProgress = [&] (const ThinkingProgress& p)
+        {
+            if ((int) p.stage != lastStage)
+                ++stages;
+
+            monotonic = monotonic && (int) p.stage >= lastStage && p.drafts >= lastDrafts;
+            lastStage = (int) p.stage;
+            lastDrafts = p.drafts;
+        };
+
+        const auto thought = think (r);
+        CHECK (thought.ok && ! thought.stoppedEarly && thought.reproducible);
+        CHECK (thought.drafts == budgetFor (ThinkingDepth::Thorough).totalDrafts());
+        CHECK (thought.plans > 1);
+        CHECK (thought.composition.request.allMet());
+        CHECK (thought.judgement.total >= quick.judgement.total - 1e-9);
+        CHECK (thought.reasoning.size() >= 5);
+        CHECK (stages == 6 && monotonic);   // reading, planning, drafting, developing, checking, done
+
+        // Deterministic, and reproducible from the seeds it reports (the controls, Lock and saved
+        // projects rely on this): the plan, then compose (spec, composeSeed).
+        const auto again = think (request (prompt, 21, ThinkingDepth::Thorough));
+        CHECK (again.composeSeed == thought.composeSeed && notesOf (again.composition) == notesOf (thought.composition));
+
+        auto spec = interpretPrompt (prompt, thought.planSeed);
+        if (thought.variationSeed != 0)
+            spec = varySpec (spec, thought.variationSeed);
+
+        CHECK (notesOf (compose (spec, thought.composeSeed)) == notesOf (thought.composition));
+    }
+
+    // Asked to stop: "use the best so far" returns a draft at once; cancel returns nothing.
+    {
+        std::atomic<int> control { 1 };
+        auto r = request ("happy ukulele song", 5, ThinkingDepth::Deep);
+        r.control = &control;
+        const auto early = think (r);
+        CHECK (early.ok && early.stoppedEarly && early.drafts == 1);
+
+        control = 2;
+        CHECK (! think (r).ok);
+    }
+
+    // A fixed plan (Claude's) gets every draft; earlier takes push towards new music.
+    {
+        const auto plan = interpretPrompt ("string quartet in G major", 9);
+        ThinkingRequest r;
+        r.seed = 9;
+        r.depth = ThinkingDepth::Thorough;
+        r.fixedPlan = true;
+        r.makePlan = [plan] (int) { ThinkingPlan p; p.planSeed = 9; p.spec = plan; return p; };
+        const auto fixed = think (r);
+        CHECK (fixed.ok && fixed.plans == 1 && fixed.drafts == budgetFor (ThinkingDepth::Thorough).totalDrafts());
+        CHECK (fixed.composition.request.allMet());
+
+        r.otherTakes = { fixed.composition };
+        const auto fresh = think (r);
+        CHECK (fresh.takeOverlap >= 0.0 && fresh.takeOverlap < r.maxTakeOverlap);
+        CHECK (notesOf (fresh.composition) != notesOf (fixed.composition));
+    }
+
+    // The judge: scores in range, every aspect explained, and it tells a muddle from a tune.
+    {
+        const auto spec = interpretPrompt ("Make me a soft piano midi", 3);
+        const auto good = compose (spec, 3);
+        const auto j = judgeDraft (good, spec);
+        CHECK (j.total > 0.0 && j.total <= 100.0);
+        CHECK (j.aspects.size() >= 7);
+
+        for (auto& a : j.aspects)
+            CHECK (a.score >= 0.0 && a.score <= 10.0 && ! a.note.empty());
+
+        // The same piece with its tune flattened to one repeated note is judged worse.
+        auto flat = good;
+        for (auto& t : flat.tracks)
+            if (t.role == Role::Melody)
+                for (auto& n : t.notes)
+                    n.pitch = 72;
+
+        CHECK (judgeDraft (flat, spec).find ("Melody")->score < j.find ("Melody")->score - 2.0);
+    }
+}
+
 int main()
 {
     testChordParsing();
@@ -1375,6 +1517,7 @@ int main()
     testCustomInstruments();
     testRequests();
     testOriginality();
+    testThinking();
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

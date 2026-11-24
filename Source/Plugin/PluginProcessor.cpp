@@ -493,14 +493,40 @@ void PromptMidiProcessor::setStatus (Status s, const juce::String& message)
     sendChangeMessage();
 }
 
-void PromptMidiProcessor::cancelGeneration()
+void PromptMidiProcessor::stopJobs()
 {
-    if (claudeJob != nullptr)
+    if (claudeJob != nullptr || thinkingJob != nullptr)
     {
         ++requestCounter;
         claudeJob.reset();
+        thinkingJob.reset();
+    }
+}
+
+void PromptMidiProcessor::cancelGeneration()
+{
+    if (isGenerating())
+    {
+        stopJobs();
         setStatus (Status::Idle, "Cancelled.");
     }
+}
+
+void PromptMidiProcessor::finishThinkingNow()
+{
+    if (thinkingJob != nullptr)
+        thinkingJob->finishNow();
+}
+
+pm::ThinkingDepth PromptMidiProcessor::getThinkingDepth() const
+{
+    const int d = depthOverride >= 0 ? depthOverride : settings->getThinkingDepth();
+    return (pm::ThinkingDepth) juce::jlimit (0, 2, d);
+}
+
+pm::ThinkingProgress PromptMidiProcessor::getThinkingProgress() const
+{
+    return thinkingJob != nullptr ? thinkingJob->getProgress() : pm::ThinkingProgress();
 }
 
 void PromptMidiProcessor::generate (const juce::String& newPrompt)
@@ -513,25 +539,36 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
         return;
     }
 
-    if (claudeJob != nullptr)
-    {
-        ++requestCounter;
-        claudeJob.reset();
-    }
+    stopJobs();
 
     const uint64_t newSeed = seedLocked ? seed : randomSeed();
 
     if (engine == Engine::Offline)
     {
-        startNewTake ("Generated");
-        lastPrompt = prompt;
-        lastEngine = Engine::Offline;
-        variationSeed = 0;
-        interpretSeed = newSeed;
-        baseSpec = pm::interpretPrompt (prompt.toStdString(), newSeed, promptOverrides());
-        mutedMask.store (0);
-        applySpec (baseSpec, newSeed);
-        setStatus (Status::Idle, "Generated offline. Press Variation for another take, or drag the MIDI into your DAW.");
+        // Several readings of the prompt (plan 0 is the literal one), and variations of the best.
+        const auto text = prompt.toStdString();
+        const auto overrides = promptOverrides();
+
+        pm::ThinkingRequest request;
+        request.seed = newSeed;
+        request.depth = getThinkingDepth();
+        request.makePlan = [text, overrides, newSeed] (int i)
+        {
+            pm::ThinkingPlan p;
+            p.planSeed = pm::planSeedFor (newSeed, i);
+            p.spec = pm::interpretPrompt (text, p.planSeed, overrides);
+            return p;
+        };
+        request.varyPlan = [] (const pm::ThinkingPlan& base, uint64_t variation)
+        {
+            auto p = base;
+            p.variationSeed = variation;
+            p.spec = pm::varySpec (base.spec, variation);
+            return p;
+        };
+
+        startThinking (std::move (request), "Generated", prompt, Engine::Offline, {},
+                       "Press Variation for another take, or drag the MIDI into your DAW.");
         return;
     }
 
@@ -563,31 +600,38 @@ void PromptMidiProcessor::generate (const juce::String& newPrompt)
                 return;
             }
 
-            startNewTake ("Claude");
-            baseSpec = result.spec;
-            baseSpec.interpretation.insert (baseSpec.interpretation.begin(),
-                                            "Planned by " + (result.model.isNotEmpty() ? result.model : settings->getModel()).toStdString());
-            lastPrompt = requestPrompt;
-            lastEngine = Engine::Claude;
-            variationSeed = 0;
-            interpretSeed = newSeed;
-
-            auto s = baseSpec;
-            applyControls (s, true);
+            auto plan = result.spec;
+            plan.interpretation.insert (plan.interpretation.begin(),
+                                        "Planned by " + (result.model.isNotEmpty() ? result.model : settings->getModel()).toStdString());
 
             // Claude's plan is held to the same request as the offline one: what the prompt and
             // the controls ask for (instruments, key, tempo, length...) is enforced, then checked.
+            auto s = plan;
+            applyControls (s, true);
             s.request = pm::parseRequest (requestPrompt.toStdString(), promptOverrides());
             pm::applyRequest (s, s.request);
-            mutedMask.store (0);
-            applySpec (s, newSeed);
-            setStatus (Status::Idle, "Composed with Claude. Press Variation for another take with the same plan.");
+
+            // Then PromptMIDI thinks about how to write it: many drafts of Claude's plan.
+            pm::ThinkingRequest request;
+            request.seed = newSeed;
+            request.depth = getThinkingDepth();
+            request.fixedPlan = true;
+            request.makePlan = [s, newSeed] (int)
+            {
+                pm::ThinkingPlan p;
+                p.planSeed = newSeed;
+                p.spec = s;
+                return p;
+            };
+
+            startThinking (std::move (request), "Claude", requestPrompt, Engine::Claude, plan,
+                           "Composed with Claude. Press Variation for another take with the same plan.");
         });
 }
 
 void PromptMidiProcessor::makeVariation()
 {
-    if (claudeJob != nullptr)
+    if (isGenerating())
         return;
 
     if (spec.tracks.empty())
@@ -598,24 +642,122 @@ void PromptMidiProcessor::makeVariation()
 
     // Same key, tempo, length and instruments; new harmony (unless Claude planned it), new
     // accompaniment figures, and - from the new seed - a new theme, form and orchestration.
-    startNewTake ("Variation");
+    // A variation is new music: drafts that share much of their melody with an earlier take lose.
     const auto base = spec;
+    const bool keepHarmony = lastEngine == Engine::Claude;
+    const uint64_t master = randomSeed();
+    const uint64_t interpretation = interpretSeed;
 
-    // A variation is new music: if it shares much of its melody with an earlier take, try again.
-    for (int attempt = 0; attempt < 3; ++attempt)
+    pm::ThinkingRequest request;
+    request.seed = master;
+    request.depth = getThinkingDepth();
+
+    if (request.depth == pm::ThinkingDepth::Quick)
+        request.budget = pm::ThinkingBudget { 3, 1, 0, 0, 0 };   // a few tries, for something new
+
+    request.makePlan = [base, keepHarmony, master, interpretation] (int i)
     {
-        variationSeed = randomSeed();
-        applySpec (pm::varySpec (base, variationSeed, lastEngine == Engine::Claude), variationSeed);
+        pm::ThinkingPlan p;
+        p.planSeed = interpretation;
+        p.variationSeed = pm::planSeedFor (master, i);
+        p.spec = pm::varySpec (base, p.variationSeed, keepHarmony);
+        return p;
+    };
 
-        if (overlapWithOtherTakes() < maxTakeOverlap)
-            break;
+    storeTake();
+
+    for (auto& t : takes)
+        if (t.composition.noteCount() > 0)
+            request.otherTakes.push_back (t.composition);
+
+    request.maxTakeOverlap = maxTakeOverlap;
+
+    startThinking (std::move (request), "Variation", lastPrompt, lastEngine, baseSpec,
+                   "New variation: same key, tempo and instruments, new music. The previous take is one click back.");
+}
+
+void PromptMidiProcessor::startThinking (pm::ThinkingRequest request, const juce::String& kind, const juce::String& forPrompt,
+                                         Engine engineUsed, const pm::StyleSpec& claudePlan, const juce::String& doneMessage)
+{
+    const int requestId = ++requestCounter;
+    const uint64_t master = request.seed;
+
+    auto onDone = [this, requestId, master, kind, forPrompt, engineUsed, claudePlan, doneMessage] (pm::ThinkingResult result)
+    {
+        if (requestId != requestCounter)
+            return;
+
+        thinkingJob.reset();
+
+        if (! result.ok)
+        {
+            setStatus (Status::Idle, "Cancelled.");
+            return;
+        }
+
+        adoptThought (std::move (result), master, kind, forPrompt, engineUsed, claudePlan, doneMessage);
+    };
+
+    // Quick answers at once; thinking runs on a worker thread so the window stays responsive.
+    if (request.depth == pm::ThinkingDepth::Quick || ! thinkInBackground)
+    {
+        onDone (pm::think (request));
+        return;
     }
-    setStatus (Status::Idle, "New variation: same key, tempo and instruments, new music. The previous take is one click back.");
+
+    thinkingFor = kind == "Variation" ? juce::String ("a variation") : forPrompt;
+    thinkingStartedAt = juce::Time::getMillisecondCounterHiRes();
+    thinkingJob = std::make_unique<ThinkingJob> (std::move (request), std::move (onDone));
+    setStatus (Status::Working, "Thinking...");
+}
+
+void PromptMidiProcessor::adoptThought (pm::ThinkingResult result, uint64_t master, const juce::String& kind, const juce::String& forPrompt,
+                                        Engine engineUsed, const pm::StyleSpec& claudePlan, const juce::String& doneMessage)
+{
+    startNewTake (kind);
+    seed = master;          // the seed shown (and locked): thinking from it again gives this take
+    lastPrompt = forPrompt;
+    lastEngine = engineUsed;
+
+    if (engineUsed == Engine::Claude)
+        baseSpec = claudePlan;
+
+    interpretSeed = result.planSeed;
+    variationSeed = result.variationSeed;
+
+    if (kind != "Variation")
+        mutedMask.store (0);
+
+    // How it was chosen, for the window (the reasoning shows on hover).
+    thoughtReasoning.clear();
+    thoughtSummary = {};
+
+    if (result.drafts > 1)
+    {
+        for (auto& line : result.reasoning)
+            thoughtReasoning.add (juce::String::fromUTF8 (line.c_str()));
+
+        thoughtSummary << "Thought for " << juce::String (result.seconds, result.seconds < 10.0 ? 1 : 0) << " s: "
+                       << result.drafts << " drafts";
+
+        if (result.plans > 1)
+            thoughtSummary << " of " << result.plans << " plans";
+
+        thoughtSummary << ", chose #" << (result.draftIndex + 1) << " (" << juce::roundToInt (result.judgement.total) << "/100)";
+    }
+
+    auto piece = std::move (result.composition);
+    piece.quality.candidates = juce::jmax (piece.quality.candidates, result.drafts);
+    adoptComposition (result.spec, result.composeSeed, std::move (piece));
+
+    setStatus (Status::Idle, (thoughtSummary.isNotEmpty() ? thoughtSummary + (result.stoppedEarly ? juce::String (" (stopped early)") : juce::String()) + ". "
+                                                          : juce::String (kind == "Generated" ? "Generated offline. " : ""))
+                                 + doneMessage);
 }
 
 void PromptMidiProcessor::controlsChanged()
 {
-    if (claudeJob != nullptr || spec.tracks.empty())
+    if (isGenerating() || spec.tracks.empty())
         return;
 
     if (isImportedPiece())
@@ -640,7 +782,7 @@ void PromptMidiProcessor::controlsChanged()
         if (variationSeed != 0)
             s = pm::varySpec (s, variationSeed);
 
-        applySpec (s, seed);
+        applySpec (s, composeSeed);
         setStatus (Status::Idle, "Updated." + kept);
         return;
     }
@@ -651,7 +793,7 @@ void PromptMidiProcessor::controlsChanged()
     auto request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
     request.mode = -1;   // (the plan keeps Claude's scale until Generate asks for a new plan; the check still reports it)
     pm::applyRequest (s, request);
-    applySpec (s, seed);
+    applySpec (s, composeSeed);
 
     const bool modeDiffers = controls.mode >= 0 && (pm::Mode) controls.mode != baseSpec.mode;
     setStatus (Status::Idle, (modeDiffers ? "Updated. Press Generate to have Claude re-plan in the new scale."
@@ -672,19 +814,26 @@ void PromptMidiProcessor::startNewTake (const juce::String& kind)
     currentTake = (int) takes.size() - 1;
 }
 
-void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed)
+void PromptMidiProcessor::applySpec (const pm::StyleSpec& newSpec, uint64_t newComposeSeed)
+{
+    auto s = newSpec;
+
+    // Every take is checked against what the prompt and the controls ask for.
+    if (lastPrompt.isNotEmpty())
+        s.request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
+
+    auto piece = pm::compose (s, newComposeSeed);
+    adoptComposition (s, newComposeSeed, std::move (piece));
+}
+
+void PromptMidiProcessor::adoptComposition (const pm::StyleSpec& newSpec, uint64_t newComposeSeed, pm::Composition piece)
 {
     if (takes.empty())
         startNewTake ("Generated");
 
     spec = newSpec;
-    seed = newSeed;
-
-    // Every take is checked against what the prompt and the controls ask for.
-    if (lastPrompt.isNotEmpty())
-        spec.request = pm::parseRequest (lastPrompt.toStdString(), promptOverrides());
-
-    composition = pm::compose (spec, seed);
+    composeSeed = newComposeSeed;
+    composition = std::move (piece);
 
     if (takes.size() > 1)
     {
@@ -726,6 +875,9 @@ void PromptMidiProcessor::storeTake()
     t.seed = seed;
     t.interpretSeed = interpretSeed;
     t.variationSeed = variationSeed;
+    t.composeSeed = composeSeed;
+    t.thoughtSummary = thoughtSummary;
+    t.thoughtReasoning = thoughtReasoning;
     t.muted = mutedMask.load();
     t.edited = isEdited();
 }
@@ -746,7 +898,7 @@ void PromptMidiProcessor::resetTakes()
 
 void PromptMidiProcessor::selectTake (int index)
 {
-    if (claudeJob != nullptr || index < 0 || index >= (int) takes.size() || index == currentTake)
+    if (isGenerating() || index < 0 || index >= (int) takes.size() || index == currentTake)
         return;
 
     storeTake();
@@ -760,6 +912,9 @@ void PromptMidiProcessor::selectTake (int index)
     seed = t.seed;
     interpretSeed = t.interpretSeed;
     variationSeed = t.variationSeed;
+    composeSeed = t.composeSeed;
+    thoughtSummary = t.thoughtSummary;
+    thoughtReasoning = t.thoughtReasoning;
     mutedMask.store (t.muted);
     edited = t.edited;   // edits made before this visit; new ones count through the undo history
     ++pieceVersion;
@@ -1137,6 +1292,7 @@ juce::var PromptMidiProcessor::presetToVar (const juce::String& name) const
         p->setProperty ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
         p->setProperty ("interpretSeed", juce::String ((juce::int64) interpretSeed));
         p->setProperty ("variationSeed", juce::String ((juce::int64) variationSeed));
+        p->setProperty ("composeSeed", juce::String ((juce::int64) composeSeed));
         p->setProperty ("muted", juce::String ((juce::int64) mutedMask.load()));
         p->setProperty ("edited", isEdited());
         p->setProperty ("imported", isImportedPiece());
@@ -1157,7 +1313,7 @@ bool PromptMidiProcessor::presetFromVar (const juce::var& v, juce::String& error
         return false;
     }
 
-    if (claudeJob != nullptr)
+    if (isGenerating())
     {
         error = "Wait for the current generation to finish (or cancel it) first.";
         return false;
@@ -1205,6 +1361,10 @@ bool PromptMidiProcessor::presetFromVar (const juce::var& v, juce::String& error
     lastEngine = piece["lastEngine"].toString() == "claude" ? Engine::Claude : Engine::Offline;
     interpretSeed = (uint64_t) piece["interpretSeed"].toString().getLargeIntValue();
     variationSeed = (uint64_t) piece["variationSeed"].toString().getLargeIntValue();
+    composeSeed = piece.hasProperty ("composeSeed") ? (uint64_t) piece["composeSeed"].toString().getLargeIntValue()
+                                                    : (variationSeed != 0 ? variationSeed : seed);   // before thinking, the shown seed composed it
+    thoughtSummary = {};
+    thoughtReasoning.clear();
     mutedMask.store ((uint64_t) piece["muted"].toString().getLargeIntValue());
     undoManager.clearUndoHistory();
     edited = (bool) piece["edited"];
@@ -1245,7 +1405,7 @@ void PromptMidiProcessor::loadFactoryPreset (int index)
 {
     const auto& list = PresetIO::factoryPresets();
 
-    if (index < 0 || index >= (int) list.size() || claudeJob != nullptr)
+    if (index < 0 || index >= (int) list.size() || isGenerating())
         return;
 
     const auto& f = list[(size_t) index];
@@ -1258,7 +1418,7 @@ void PromptMidiProcessor::loadFactoryPreset (int index)
 
 bool PromptMidiProcessor::importMidi (const juce::File& file, juce::String& error)
 {
-    if (claudeJob != nullptr)
+    if (isGenerating())
     {
         error = "Wait for the current generation to finish (or cancel it) first.";
         return false;
@@ -1277,6 +1437,9 @@ bool PromptMidiProcessor::importMidi (const juce::File& file, juce::String& erro
     lastEngine = Engine::Offline;
     variationSeed = 0;
     interpretSeed = seed;
+    composeSeed = seed;
+    thoughtSummary = {};
+    thoughtReasoning.clear();
     mutedMask.store (0);
     undoManager.clearUndoHistory();
     edited = false;
@@ -1332,6 +1495,7 @@ void PromptMidiProcessor::getStateInformation (juce::MemoryBlock& destData)
     xml.setAttribute ("lastEngine", lastEngine == Engine::Claude ? "claude" : "offline");
     xml.setAttribute ("interpretSeed", juce::String ((juce::int64) interpretSeed));
     xml.setAttribute ("variationSeed", juce::String ((juce::int64) variationSeed));
+    xml.setAttribute ("composeSeed", juce::String ((juce::int64) composeSeed));
 
     if (hasComposition())
     {
@@ -1396,6 +1560,7 @@ void PromptMidiProcessor::setStateInformation (const void* data, int sizeInBytes
         lastEngine = xml->getStringAttribute ("lastEngine") == "claude" ? Engine::Claude : Engine::Offline;
         interpretSeed = (uint64_t) xml->getStringAttribute ("interpretSeed", juce::String ((juce::int64) seed)).getLargeIntValue();
         variationSeed = (uint64_t) xml->getStringAttribute ("variationSeed", "0").getLargeIntValue();
+        composeSeed = (uint64_t) xml->getStringAttribute ("composeSeed", juce::String ((juce::int64) (variationSeed != 0 ? variationSeed : seed))).getLargeIntValue();
 
         if (haveSpec)
         {

@@ -6,6 +6,7 @@
 #include "Composer.h"
 #include "MidiFileWriter.h"
 #include "PromptInterpreter.h"
+#include "Thinking.h"
 
 #include <cctype>
 #include <cstdio>
@@ -19,7 +20,8 @@ static void usage()
 {
     std::cout << "usage: promptmidi-cli \"<prompt>\" [-o file.mid] [--seed N] [--notes] [--json file.json]\n"
                  "                     [--length sketch|cue|full|extended] [--articulations none|keyswitch|uacc]\n"
-                 "                     [--variation N] [--instruments \"Piano\" | \"Flutes, Harp:arpeggio\"] [--list-styles]\n";
+                 "                     [--variation N] [--instruments \"Piano\" | \"Flutes, Harp:arpeggio\"] [--list-styles]\n"
+                 "                     [--think quick|thorough|deep]   (default thorough, as in the plug-in)\n";
 }
 
 static std::string jsonEscape (const std::string& s)
@@ -97,6 +99,7 @@ int main (int argc, char** argv)
     std::string prompt, outFile, jsonFile, articulations = "none";
     uint64_t seed = 1, variation = 0;
     bool printNotes = false;
+    std::string thinking = "thorough";
     pm::PromptOverrides overrides;
 
     for (int i = 1; i < argc; ++i)
@@ -106,6 +109,7 @@ int main (int argc, char** argv)
         if ((a == "-o" || a == "--output") && i + 1 < argc)   outFile = argv[++i];
         else if (a == "--seed" && i + 1 < argc)               seed = std::strtoull (argv[++i], nullptr, 10);
         else if (a == "--variation" && i + 1 < argc)          variation = std::strtoull (argv[++i], nullptr, 10);
+        else if (a == "--think" && i + 1 < argc)              thinking = argv[++i];
         else if (a == "--notes")                              printNotes = true;
         else if (a == "--json" && i + 1 < argc)               jsonFile = argv[++i];
         else if (a == "--length" && i + 1 < argc)             overrides.length = argv[++i];
@@ -162,12 +166,46 @@ int main (int argc, char** argv)
     }
 
     auto spec = pm::interpretPrompt (prompt, seed, overrides);
+    pm::Composition comp;
+    pm::ThinkingResult thought;
 
-    if (variation > 0)
-        spec = pm::varySpec (spec, seed * 1000003ull + variation);
+    if (variation > 0 || thinking == "quick")
+    {
+        if (variation > 0)
+            spec = pm::varySpec (spec, seed * 1000003ull + variation);
 
-    // --variation N: the same plan, composed again with another seed (the plug-in's Variation button).
-    const auto comp = pm::compose (spec, variation > 0 ? seed * 1000003ull + variation : seed);
+        // --variation N: the same plan, composed again with another seed (the plug-in's Variation button).
+        comp = pm::compose (spec, variation > 0 ? seed * 1000003ull + variation : seed);
+    }
+    else
+    {
+        // Think it through, as the plug-in does: several plans, many drafts, the best kept.
+        pm::ThinkingRequest request;
+        request.seed = seed;
+        request.depth = thinking == "deep" ? pm::ThinkingDepth::Deep : pm::ThinkingDepth::Thorough;
+        request.makePlan = [&] (int i)
+        {
+            pm::ThinkingPlan p;
+            p.planSeed = pm::planSeedFor (seed, i);
+            p.spec = pm::interpretPrompt (prompt, p.planSeed, overrides);
+            return p;
+        };
+        request.varyPlan = [] (const pm::ThinkingPlan& base, uint64_t v)
+        {
+            auto p = base;
+            p.variationSeed = v;
+            p.spec = pm::varySpec (base.spec, v);
+            return p;
+        };
+
+        thought = pm::think (request);
+        spec = thought.spec;
+        comp = thought.composition;
+        std::printf ("Thought for %.2f s (%s):\n", thought.seconds, pm::depthName (request.depth));
+
+        for (auto& line : thought.reasoning)
+            std::cout << "  " << line << "\n";
+    }
 
     std::cout << "Title:   " << spec.title << "\n"
               << "Summary: " << comp.summary() << "\n";

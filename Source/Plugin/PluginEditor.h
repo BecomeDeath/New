@@ -6,6 +6,7 @@
 #include "InstrumentPicker.h"
 #include "PluginProcessor.h"
 #include "Theme.h"
+#include "ThinkingPanel.h"
 #include "Timeline.h"
 #include "UpdateCheck.h"
 
@@ -51,6 +52,9 @@ public:
 private:
     Settings& settings;
     std::function<void()> onSaved;
+    juce::Label thinkingHeading, thinkingNote;
+    juce::ComboBox thinkingBox;
+    void updateThinkingNote();
     juce::Label heading, keyLabel, modelLabel, effortLabel, note;
     juce::TextEditor keyEditor, modelEditor;
     juce::ComboBox effortBox;
@@ -163,6 +167,7 @@ private:
     IconButton prevTakeButton { "previous take", Icons::Kind::ChevronLeft }, nextTakeButton { "next take", Icons::Kind::ChevronRight };
     juce::TextButton takeButton;
     Arrangement arrangement;
+    ThinkingPanel thinkingPanel;   // over the arrangement while PromptMIDI thinks
 
     // Transport
     IconButton playButton { "play", Icons::Kind::Play };
