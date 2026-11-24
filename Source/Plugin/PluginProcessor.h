@@ -7,6 +7,7 @@
 #include "PreviewEngine.h"
 #include "PromptInterpreter.h"
 #include "Settings.h"
+#include "ThinkingJob.h"
 
 #include <array>
 #include <atomic>
@@ -76,7 +77,29 @@ public:
     /** Call after changing `controls`: re-applies them to the current piece without a new request. */
     void controlsChanged();
     void cancelGeneration();
-    bool isGenerating() const                                { return claudeJob != nullptr; }
+    bool isGenerating() const                                { return claudeJob != nullptr || thinkingJob != nullptr; }
+
+    /** Thinking (Settings: Quick, Thorough, Deep): before it answers, PromptMIDI reads the prompt
+        into several plans, writes drafts of each, develops the best and keeps the draft that meets
+        everything asked for and is judged best (Thinking.h). */
+    pm::ThinkingDepth getThinkingDepth() const;
+    bool isThinking() const                                  { return thinkingJob != nullptr; }
+    pm::ThinkingProgress getThinkingProgress() const;        // while thinking
+    double getThinkingStartedAt() const                      { return thinkingStartedAt; }   // Time::getMillisecondCounterHiRes()
+    juce::String getThinkingFor() const                      { return thinkingFor; }          // the prompt, or "a variation"
+    void finishThinkingNow();                                // stop and use the best draft so far
+
+    /** How the take on screen was chosen: a summary line and the reasoning (empty for Quick). */
+    juce::String getThoughtSummary() const                   { return thoughtSummary; }
+    const juce::StringArray& getThoughtReasoning() const     { return thoughtReasoning; }
+
+    /** Tests and tools: think on the calling thread instead of a worker thread. */
+    bool thinkInBackground = defaultThinkInBackground;
+    /** Tests and tools: use this depth instead of the setting (-1 = the setting). */
+    int depthOverride = defaultDepthOverride;
+    /** ... and the same for processors made from now on. */
+    static inline bool defaultThinkInBackground = true;
+    static inline int defaultDepthOverride = -1;
 
     Engine engine = Engine::Offline;
     Controls controls;
@@ -175,7 +198,16 @@ private:
     };
 
     /** Composes `newSpec` into the take on screen (call startNewTake() first for a new one). */
-    void applySpec (const pm::StyleSpec& newSpec, uint64_t newSeed);
+    void applySpec (const pm::StyleSpec& newSpec, uint64_t newComposeSeed);
+    /** Makes an already composed piece the take on screen. */
+    void adoptComposition (const pm::StyleSpec&, uint64_t newComposeSeed, pm::Composition);
+
+    /** Thinks with `request` (on a worker thread unless Quick), then makes the chosen draft a new take. */
+    void startThinking (pm::ThinkingRequest, const juce::String& kind, const juce::String& forPrompt,
+                        Engine engineUsed, const pm::StyleSpec& claudePlan, const juce::String& doneMessage);
+    void adoptThought (pm::ThinkingResult, uint64_t masterSeed, const juce::String& kind, const juce::String& forPrompt,
+                       Engine engineUsed, const pm::StyleSpec& claudePlan, const juce::String& doneMessage);
+    void stopJobs();
     void startNewTake (const juce::String& kind);   // keeps the take on screen and opens a new one; call before changing the state
 
     struct Take
@@ -184,7 +216,9 @@ private:
         pm::Composition composition;
         juce::String prompt;
         Engine engine = Engine::Offline;
-        uint64_t seed = 1, interpretSeed = 1, variationSeed = 0, muted = 0;
+        uint64_t seed = 1, interpretSeed = 1, variationSeed = 0, composeSeed = 1, muted = 0;
+        juce::String thoughtSummary;
+        juce::StringArray thoughtReasoning;
         bool edited = false;
         juce::String kind;        // "Generated", "Variation", "New settings"
     };
@@ -218,6 +252,12 @@ private:
     Engine lastEngine = Engine::Offline;
     uint64_t interpretSeed = 1;
     uint64_t variationSeed = 0;   // 0 = the plan as interpreted; otherwise the last Variation
+    uint64_t composeSeed = 1;     // compose (spec, composeSeed) made the piece; `seed` is the one shown (and locked)
+    std::unique_ptr<ThinkingJob> thinkingJob;
+    double thinkingStartedAt = 0.0;
+    juce::String thinkingFor;
+    juce::String thoughtSummary;
+    juce::StringArray thoughtReasoning;
     Status status = Status::Idle;
     juce::String statusMessage;
     std::unique_ptr<Claude::Job> claudeJob;

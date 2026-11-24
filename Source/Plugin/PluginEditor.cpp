@@ -139,6 +139,21 @@ void UpdateBanner::resized()
 //==============================================================================
 SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settings (s), onSaved (std::move (saved))
 {
+    // Thinking: how long PromptMIDI works on a request before it answers (both engines).
+    styleLabel (thinkingHeading, 16.0f, Theme::text, true);
+    thinkingHeading.setText ("Thinking", juce::dontSendNotification);
+    thinkingBox.addItem ("Quick: answer at once", 1);
+    thinkingBox.addItem ("Thorough: think it through (recommended)", 2);
+    thinkingBox.addItem ("Deep: take longer, try even more", 3);
+    thinkingBox.setSelectedId (settings.getThinkingDepth() + 1, juce::dontSendNotification);
+    thinkingBox.onChange = [this] { updateThinkingNote(); };
+    styleLabel (thinkingNote, 12.0f, Theme::textDim);
+    thinkingNote.setJustificationType (juce::Justification::topLeft);
+    updateThinkingNote();
+
+    for (auto* c : std::initializer_list<juce::Component*> { &thinkingHeading, &thinkingBox, &thinkingNote })
+        addAndMakeVisible (c);
+
     styleLabel (heading, 16.0f, Theme::text, true);
     heading.setText ("Claude AI settings", juce::dontSendNotification);
 
@@ -197,6 +212,7 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
         settings.setArticulationValues (valuesEditor.getText());
         settings.setArticulationController (controllerEditor.getText().getIntValue());
         settings.setPreviewSound (soundSetting());
+        settings.setThinkingDepth (thinkingBox.getSelectedId() - 1);
 
         if (onSaved)
             onSaved();
@@ -326,7 +342,7 @@ SettingsPanel::SettingsPanel (Settings& s, std::function<void()> saved) : settin
                                                              &exportNote, &articulationBox, &valuesEditor, &controllerEditor })
         addAndMakeVisible (c);
 
-    setSize (520, 650);
+    setSize (520, 740);
 }
 
 void SettingsPanel::rebuildSoundBox()
@@ -357,12 +373,33 @@ void SettingsPanel::paint (juce::Graphics& g)
     g.fillAll (Theme::panel);
 }
 
+void SettingsPanel::updateThinkingNote()
+{
+    const auto depth = (pm::ThinkingDepth) juce::jlimit (0, 2, thinkingBox.getSelectedId() - 1);
+    const auto budget = pm::budgetFor (depth);
+
+    thinkingNote.setText (depth == pm::ThinkingDepth::Quick
+                              ? juce::String ("Writes a few drafts of the first plan and answers at once.")
+                              : "Before it answers, reads your prompt into " + juce::String (budget.plans) + " plans, writes "
+                                    + juce::String (budget.totalDrafts()) + " drafts, develops the best and keeps the one that meets "
+                                    "everything you asked for and is judged best. " + juce::String (depth == pm::ThinkingDepth::Deep
+                                        ? "A few seconds, longer for long cues." : "Usually about a second."),
+                          juce::dontSendNotification);
+}
+
 void SettingsPanel::resized()
 {
     auto r = getLocalBounds().reduced (16);
     auto top = r.removeFromTop (26);
     versionLabel.setBounds (top.removeFromRight (160));
-    heading.setBounds (top);
+    thinkingHeading.setBounds (top);
+    r.removeFromTop (4);
+    thinkingBox.setBounds (r.removeFromTop (28));
+    r.removeFromTop (4);
+    thinkingNote.setBounds (r.removeFromTop (34));
+    r.removeFromTop (12);
+
+    heading.setBounds (r.removeFromTop (26));
     r.removeFromTop (6);
 
     keyLabel.setBounds (r.removeFromTop (20));
@@ -666,6 +703,10 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     arrangement.setComponentID ("arrangement");
     addAndMakeVisible (arrangement);
 
+    thinkingPanel.onFinishNow = [this] { processor.finishThinkingNow(); };
+    thinkingPanel.onCancel = [this] { processor.cancelGeneration(); };
+    addChildComponent (thinkingPanel);
+
     // Transport
     playButton.setTooltip ("Preview the result here (Space). The preview is only heard inside PromptMIDI - never with your DAW's playback.");
     playButton.onClick = [this] { togglePreview(); };
@@ -907,6 +948,7 @@ void PromptMidiEditor::resized()
     r.removeFromTop (10);
 
     arrangement.setBounds (r.withTrimmedBottom (14));
+    thinkingPanel.setBounds (arrangement.getBounds());
 }
 
 void PromptMidiEditor::paintOverChildren (juce::Graphics& g)
@@ -1282,6 +1324,16 @@ void PromptMidiEditor::refreshFromProcessor()
 
         juce::StringArray details;
 
+        if (processor.getThoughtReasoning().size() > 0)
+        {
+            details.add ("How it was chosen (" + processor.getThoughtSummary() + "):");
+
+            for (auto& line : processor.getThoughtReasoning())
+                details.add ("  " + line);
+
+            details.add ({});
+        }
+
         if (request.total() > 0)
         {
             details.add ("What you asked for:");
@@ -1353,6 +1405,25 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
+    // Thinking: the panel over the arrangement, with its timer.
+    if (processor.isThinking())
+    {
+        if (! thinkingPanel.isVisible())
+        {
+            thinkingPanel.reset();
+            thinkingPanel.setVisible (true);
+            thinkingPanel.toFront (false);
+        }
+
+        thinkingPanel.update (processor.getThinkingProgress(),
+                              (juce::Time::getMillisecondCounterHiRes() - processor.getThinkingStartedAt()) / 1000.0,
+                              processor.getThinkingFor(), processor.getThinkingDepth());
+    }
+    else if (thinkingPanel.isVisible())
+    {
+        thinkingPanel.setVisible (false);
+    }
+
     if (! updateCheckStarted && isShowing())
     {
         updateCheckStarted = true;

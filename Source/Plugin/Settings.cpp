@@ -89,6 +89,20 @@ void Settings::setPreviewSound (const juce::String& sound)
     }
 }
 
+int Settings::getThinkingDepth() const
+{
+    return props() == nullptr ? 1 : juce::jlimit (0, 2, props()->getIntValue ("thinkingDepth", 1));
+}
+
+void Settings::setThinkingDepth (int depth)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("thinkingDepth", juce::jlimit (0, 2, depth));
+        p->saveIfNeeded();
+    }
+}
+
 bool Settings::getCheckForUpdates() const
 {
     return props() == nullptr || props()->getBoolValue ("checkForUpdates", true);

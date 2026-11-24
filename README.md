@@ -16,6 +16,7 @@
 - **Two engines:**
   - **Offline** (default): instant, free, no internet. A built-in interpreter recognises 40+ styles (including 12 orchestral game and film archetypes), 20+ moods, 60+ instruments and explicit settings, then a composition engine writes the music.
   - **Claude AI** (optional): Claude reads your prompt and writes the *composition plan* (key, mode, chord progression, instrumentation, registers, playing patterns, arrangement and a main theme). PromptMIDI's engine then writes the notes from that plan, so the MIDI is always valid and playable, even for unusual prompts such as *"music for a dwarven forge at night"*.
+- **It thinks before it answers:** instead of handing back its first idea, PromptMIDI reads the prompt into several different plans (keys, tempos, harmony, orchestration, all within what you asked for), writes hundreds of drafts, develops the most promising, and keeps the one that meets every criterion and a musician's judgement rates highest. A panel shows each stage with a live timer, the best draft so far, **Use best so far** and **Cancel**. See [Thinking](#thinking).
 - **It does what you asked:** every prompt becomes a list of criteria (*only piano*, *a trio*, *the tenor sax plays the melody*, *no drums*, *D minor*, *140 BPM*, *about 30 seconds*, *3/4*, *soft*...). The plan is built to meet them, every draft is checked against them, and the plug-in shows the result: *Matches your request 5/5*, with each criterion on hover. See [Does it match the request?](#does-it-match-the-request).
 - **New music, never a copy:** the engine learned only statistics from its reference corpus (no melody or piece is stored), and every generated tune is also checked against fingerprints of the corpus's melodies, so nothing it writes reproduces a passage of a downloaded MIDI file. Each Variation is also checked against your earlier takes. See [Originality](#originality).
 - **Different every time:** themes, rhythms and harmony draw on statistics learned from about 28,000 pieces of the Lakh MIDI Dataset (see [Credits and data](#credits-and-data)), forms and orchestration vary from piece to piece, and **Variation** gives genuinely new music (new tune, harmony, form and orchestration) while keeping the key, tempo, length and instruments.
@@ -37,6 +38,35 @@
 - **Presets, MIDI in and out:** save a piece with its prompt, settings and edits as a preset, load it again or share it (`.promptmidi` files), start from 16 factory presets, and **import any MIDI file** (from the Presets menu, or by dropping it on the window) to view, edit, preview and drag it out again, or press Variation for new music for its instruments. See [Presets and MIDI files](#presets-and-midi-files).
 - **Key / Scale / Tempo / Bars / Length / Instruments** controls re-shape the current result instantly. **Seed** with **Lock** makes results reproducible.
 - **Mute** tracks to leave them out of playback and export. Everything is saved with your DAW project. The API key is not.
+
+## Thinking
+
+Press **Generate** (or **Variation**) and PromptMIDI works on the request before it answers, the way you'd sketch a few ideas, try each one and keep the best:
+
+1. **Reading your prompt:** the literal reading first (style, mood, instruments, key, tempo, length).
+2. **Sketching plans:** 16 different readings within what you asked for: other keys, tempos, chord progressions and orchestrations. Anything you specified (instruments, key, tempo, length, meter, dynamics) is kept in every plan.
+3. **Writing drafts:** drafts of every plan. Each one is checked against your request and for craft, then judged.
+4. **Developing the best ideas:** the four most promising plans get more drafts, and so do variations of them (other harmony and accompaniment figures).
+5. **Final check:** the winner must meet every criterion. Then it's judged as a whole, and the reasoning is kept.
+
+**The judge** (`Source/Core/Judge.h`) listens like a musician, on top of the request and craft checks (range, chord tones, clashes, muddy low notes):
+- **Melody:** a climax late in the tune, a motif that comes back, leaps that turn back by step, more than one rhythm, a held last note on the tonic.
+- **Harmony:** enough different chords, a cadence home (V–I or IV–I), the bass on chord tones.
+- **Balance:** the tune audible above the accompaniment, with the parts spread across registers.
+- **Mood:** how busy and how loud, against the energy of the mood you asked for.
+- **Shape:** the dynamic arc (builds, peaks, settles, or stays level, as planned).
+
+Hover over the verdict under the title to see how the take was chosen: the plan, the draft, its score on each aspect, and how the other drafts compared.
+
+**Settings > Thinking** sets how long it works on a request:
+
+| | Drafts | Time (typical / longest cue) |
+|---|---|---|
+| Quick | a few, of the first plan | instant |
+| Thorough (default) | 296, over 16 plans and 8 variations | about 0.5 s / 4 s |
+| Deep | 960, over 32 plans and 16 variations | about 2 s / 10 s |
+
+Measured over 72 generations (24 prompts × 3 seeds), every result met every criterion at all three depths. Quick averaged 92.2/100 on the judge and 9.46/10 on the quality check, Thorough 95.9 and 9.79, Deep 96.1 and 9.83. Thinking is deterministic: the same prompt, settings, seed and depth give the same piece, so **Lock** still reproduces a take. The Key, Tempo and other controls re-compose the chosen draft instantly, without thinking again. With **Claude AI**, Claude writes the plan and PromptMIDI then thinks about how to write it: every draft goes to Claude's plan.
 
 ## The editor
 
@@ -266,13 +296,15 @@ Source/Core/     Engine: plain C++17, no JUCE
   Composer       plan -> notes (harmony, melody, accompaniment patterns, drums); best-of-N takes
   CueEngine      orchestral cues: form, phrase harmony, thematic development, orchestration, transitions
   QualityCheck   the check every generation goes through, and the repair pass
+  Judge          a musician's judgement of a draft: melody, harmony, balance, mood, shape
+  Thinking       plans, drafts, developing the best, the final check (Quick / Thorough / Deep)
   Request, RequestCheck  what the prompt asks for, applied to the plan and checked on the notes
   Originality    melodic fingerprints; the check against the corpus index (OriginalityData, generated)
   Learned        uses the corpus statistics (LearnedData, generated) for rhythms, intervals and progressions
   MidiFileWriter notes -> Standard MIDI File (markers, loop points, keyswitch / CC articulations)
 Source/Plugin/   JUCE plug-in: processor, editor, arrangement and note editor (Timeline), instrument picker,
                  presets and MIDI import (PresetIO), preview engine (SoundFont player and sketch synth),
-                 Claude client, JSON, update check (UpdateCheck)
+                 Claude client, JSON, update check (UpdateCheck), thinking on a worker thread and its panel
 Resources/Fonts/ the Inter typeface (SIL Open Font License)
 Resources/Icon/  the app icon
 Resources/SoundFont/ GeneralUser GS, the preview's instruments (its licence alongside)

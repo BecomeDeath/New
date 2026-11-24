@@ -50,6 +50,10 @@ public:
 
     /** Updates: whether to look for a newer version when the window opens (default on), when it
         last looked, the newest version it found, and a version the user chose to skip. */
+    /** How long PromptMIDI thinks before it answers (pm::ThinkingDepth): 0 Quick, 1 Thorough, 2 Deep. */
+    int getThinkingDepth() const;
+    void setThinkingDepth (int);
+
     bool getCheckForUpdates() const;
     void setCheckForUpdates (bool);
     juce::int64 getLastUpdateCheck() const;

@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "InstrumentPicker.h"
+#include "Judge.h"
 #include "PresetIO.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
@@ -59,9 +60,37 @@ static float render (PromptMidiProcessor& p, int blocks, int& noteOns)
     return peak;
 }
 
+/** Every note of a piece, for comparing two pieces. */
+static std::vector<std::tuple<int, int, int>> allNotes (const pm::Composition& c)
+{
+    std::vector<std::tuple<int, int, int>> all;
+
+    for (const auto& t : c.tracks)
+        for (const auto& n : t.notes)
+            all.emplace_back (n.start, n.pitch, n.length);
+
+    return all;
+}
+
+/** Runs the message loop until `done` or the time is up. */
+template <typename Condition>
+static bool waitFor (Condition done, int timeoutMs)
+{
+    const auto until = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+
+    while (! done() && juce::Time::getMillisecondCounter() < until)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+
+    return done();
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+
+    // Most tests answer at once (Quick, on this thread); thinking has its own tests at the end.
+    PromptMidiProcessor::defaultThinkInBackground = false;
+    PromptMidiProcessor::defaultDepthOverride = 0;
 
     PromptMidiProcessor processor;
     processor.seedLocked = true;
@@ -484,6 +513,90 @@ int main()
         }
 
         editor.reset();
+    }
+
+    std::printf ("thinking before it answers\n");
+    {
+        const juce::String prompt ("Make me a soft piano midi");
+        PromptMidiProcessor quick, thorough;
+
+        for (auto* p : { &quick, &thorough })
+        {
+            p->seedLocked = true;
+            p->seed = 5;
+        }
+
+        quick.depthOverride = 0;
+        thorough.depthOverride = 1;
+        quick.generate (prompt);
+        thorough.generate (prompt);
+
+        // Quick answers at once with the first reading; Thorough considers hundreds of drafts
+        // across several plans and keeps one at least as good, by the same judge.
+        CHECK (quick.hasComposition() && thorough.hasComposition());
+        CHECK (quick.getThoughtSummary().isEmpty());
+        CHECK (thorough.getThoughtSummary().startsWith ("Thought for"));
+        CHECK (thorough.getThoughtReasoning().size() >= 5);
+        CHECK (thorough.getComposition().quality.candidates >= 200);
+        CHECK (thorough.getComposition().request.allMet());
+        CHECK (pm::judgeDraft (thorough.getComposition(), thorough.getSpec()).total
+               >= pm::judgeDraft (quick.getComposition(), quick.getSpec()).total - 1e-9);
+
+        // The seed shown (and locked) is the one it thought from: the same seed, the same piece.
+        const auto chosen = allNotes (thorough.getComposition());
+        CHECK (thorough.seed == 5);
+        thorough.generate (prompt);
+        CHECK (allNotes (thorough.getComposition()) == chosen);
+
+        // The controls re-compose the chosen draft, not a new one: nothing changed, nothing moves.
+        thorough.controlsChanged();
+        CHECK (allNotes (thorough.getComposition()) == chosen);
+
+        // ... and a saved project brings back the seeds that made it.
+        juce::MemoryBlock state;
+        thorough.getStateInformation (state);
+        PromptMidiProcessor restored;
+        restored.setStateInformation (state.getData(), (int) state.getSize());
+        restored.controlsChanged();
+        CHECK (allNotes (restored.getComposition()) == chosen);
+
+        // A thought-out variation is new music, and meets everything (including "different").
+        thorough.makeVariation();
+        CHECK (thorough.getCurrentTake() == thorough.getNumTakes() - 1);
+        CHECK (allNotes (thorough.getComposition()) != chosen);
+        CHECK (thorough.getComposition().request.allMet());
+        CHECK (thorough.getThoughtSummary().startsWith ("Thought for"));
+        thorough.selectTake (0);
+        CHECK (thorough.getThoughtReasoning().size() >= 5);   // each take keeps how it was chosen
+    }
+    {
+        // On a worker thread: the window stays usable, progress comes in, and the best so far can
+        // be taken at any time - or the whole thing cancelled, leaving the take on screen alone.
+        PromptMidiProcessor p;
+        p.thinkInBackground = true;
+        p.depthOverride = 2;
+        p.generate ("Generate me a fantasy orchestral midi");
+        CHECK (p.isThinking() && p.isGenerating());
+        CHECK (p.getStatus() == PromptMidiProcessor::Status::Working);
+        CHECK (waitFor ([&] { return p.getThinkingProgress().drafts >= 5; }, 20000));
+        CHECK (p.getThinkingProgress().totalDrafts >= 900);
+        p.finishThinkingNow();
+        CHECK (waitFor ([&] { return ! p.isThinking(); }, 20000));
+        CHECK (p.hasComposition());
+        CHECK (p.getStatusMessage().contains ("stopped early"));
+        CHECK (p.getComposition().quality.candidates < 900);
+
+        const auto kept = allNotes (p.getComposition());
+        p.generate ("happy ukulele song");
+        CHECK (p.isThinking());
+        p.cancelGeneration();
+        CHECK (! p.isThinking() && ! p.isGenerating());
+        CHECK (p.getStatusMessage() == "Cancelled.");
+        CHECK (allNotes (p.getComposition()) == kept);
+
+        // Closing the plug-in while it thinks is safe.
+        p.generate ("happy ukulele song");
+        CHECK (p.isThinking());
     }
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);

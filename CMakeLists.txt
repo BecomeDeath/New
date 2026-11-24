@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.22)
 
-project (PromptMIDI VERSION 1.0.0 LANGUAGES C CXX)
+project (PromptMIDI VERSION 1.1.0 LANGUAGES C CXX)
 
 # The version shown in Settings and compared with the newest release (Source/Plugin/UpdateCheck.h).
 add_compile_definitions (PROMPTMIDI_VERSION="${PROJECT_VERSION}")
@@ -28,6 +28,7 @@ set (PROMPTMIDI_VST2_SDK "" CACHE PATH
 add_library (promptmidi_core STATIC
     Source/Core/Composer.cpp
     Source/Core/CueEngine.cpp
+    Source/Core/Judge.cpp
     Source/Core/Learned.cpp
     Source/Core/LearnedData.cpp
     Source/Core/MidiFileWriter.cpp
@@ -37,7 +38,8 @@ add_library (promptmidi_core STATIC
     Source/Core/PromptInterpreter.cpp
     Source/Core/QualityCheck.cpp
     Source/Core/RequestCheck.cpp
-    Source/Core/StyleSpec.cpp)
+    Source/Core/StyleSpec.cpp
+    Source/Core/Thinking.cpp)
 
 target_include_directories (promptmidi_core PUBLIC Source/Core)
 
@@ -145,6 +147,8 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         Source/Plugin/PreviewSynth.cpp
         Source/Plugin/Settings.cpp
         Source/Plugin/SpecJson.cpp
+        Source/Plugin/ThinkingJob.cpp
+        Source/Plugin/ThinkingPanel.cpp
         Source/Plugin/Timeline.cpp
         Source/Plugin/UpdateCheck.cpp)
 
@@ -222,7 +226,7 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         juce_add_console_app (promptmidi_ui_snapshot PRODUCT_NAME "promptmidi_ui_snapshot" NEEDS_CURL TRUE)
         target_sources (promptmidi_ui_snapshot PRIVATE Tools/ui_snapshot.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
         target_include_directories (promptmidi_ui_snapshot PRIVATE Source/Plugin)
-        target_compile_definitions (promptmidi_ui_snapshot PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
+        target_compile_definitions (promptmidi_ui_snapshot PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0 JUCE_MODAL_LOOPS_PERMITTED=1)
         target_link_libraries (promptmidi_ui_snapshot PRIVATE promptmidi_core promptmidi_tsf PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
                                PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
@@ -240,7 +244,7 @@ if (PROMPTMIDI_BUILD_PLUGIN)
         juce_add_console_app (promptmidi_editor_tests PRODUCT_NAME "promptmidi_editor_tests" NEEDS_CURL TRUE)
         target_sources (promptmidi_editor_tests PRIVATE Tests/EditorTests.cpp ${PROMPTMIDI_PLUGIN_SOURCES})
         target_include_directories (promptmidi_editor_tests PRIVATE Source/Plugin)
-        target_compile_definitions (promptmidi_editor_tests PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0)
+        target_compile_definitions (promptmidi_editor_tests PRIVATE JucePlugin_Name="PromptMIDI" JUCE_WEB_BROWSER=0 JUCE_MODAL_LOOPS_PERMITTED=1)
         target_link_libraries (promptmidi_editor_tests PRIVATE promptmidi_core promptmidi_tsf PromptMIDIData juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
                                PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
         promptmidi_copy_soundfont (promptmidi_editor_tests "$<TARGET_FILE_DIR:promptmidi_editor_tests>")
