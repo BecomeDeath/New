@@ -9,6 +9,8 @@
 #include "ThinkingPanel.h"
 #include "Timeline.h"
 #include "UpdateCheck.h"
+#include "UpdateDialog.h"
+#include "Updater.h"
 
 //==============================================================================
 /** The "Drag MIDI into your DAW" target in the footer (all tracks that aren't muted). */
@@ -198,6 +200,13 @@ private:
     // "An update is available" (the checker is last, so it's cancelled before anything it calls back into goes away).
     UpdateBanner updateBanner;
     bool updateCheckStarted = false;
+    UpdateDialog updateDialog;                      // "an update is available", in the middle; updating happens there
+    juce::SharedResourcePointer<Updater> updater;   // one for every PromptMIDI window in this process
+    bool quitRequested = false;
+    void offerUpdate (const updates::Release&);
+    void openUpdateDialog();
+    void followUpdater();
+    juce::String updateHint (bool inApp) const;
     updates::Checker updateChecker;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PromptMidiEditor)

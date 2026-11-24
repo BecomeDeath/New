@@ -62,6 +62,8 @@ public:
     void setKnownRelease (const juce::String&);
     juce::String getSkippedVersion() const;
     void setSkippedVersion (const juce::String&);
+    juce::String getPendingUpdate() const;           // the version an in-app update installed (or will, on Windows)
+    void setPendingUpdate (const juce::String&);
 
     juce::File getFile() const;
 

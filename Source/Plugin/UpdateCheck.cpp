@@ -78,6 +78,14 @@ Release parseManifest (const juce::String& json, const juce::String& platform)
     r.notes    = v["notes"].toString().trim().substring (0, 400);
     r.page     = web (v["page"]);
     r.download = web (v["downloads"][juce::Identifier (platform)]);
+    r.json     = json;
+
+    const auto sum = v["sha256"][juce::Identifier (platform)].toString().trim().toLowerCase();
+
+    if (sum.length() == 64 && sum.containsOnly ("0123456789abcdef"))
+        r.sha256 = sum;
+
+    r.size = juce::jmax ((juce::int64) 0, (juce::int64) v["sizes"][juce::Identifier (platform)]);
     return r;
 }
 

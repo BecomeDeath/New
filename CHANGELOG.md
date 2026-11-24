@@ -4,6 +4,11 @@ Each release's section becomes its GitHub release notes, and its first lines are
 plug-in shows next to "An update is available". Add a section, set the same version in
 CMakeLists.txt (`project (PromptMIDI VERSION ...)`), then push a tag `v<version>`.
 
+## 1.2.0
+
+- Updates install from inside PromptMIDI, like a game launcher: no browser, no installer to run. It downloads, verifies and installs the new version, keeping the parts and folders you chose.
+- "An update is available" now appears in the middle of the window, with Update now and Later.
+
 ## 1.1.0
 
 - PromptMIDI now thinks before it answers. It reads your prompt into several plans, writes hundreds of drafts, develops the best and keeps the one that meets everything you asked for and is judged best: better melodies, cleaner harmony and endings. A panel shows each stage with a live timer, the best draft so far, Use best so far and Cancel.

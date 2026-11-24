@@ -55,6 +55,45 @@ int main (int argc, char** argv)
         juce::MessageManager::getInstance()->runDispatchLoopUntil ((int) (thinking.getDoubleValue() * 1000.0));
     }
 
+    // PROMPTMIDI_SNAPSHOT_UPDATE=offer | download | ready | failed: the update dialog in that state.
+    if (const auto update = juce::SystemStats::getEnvironmentVariable ("PROMPTMIDI_SNAPSHOT_UPDATE", {}); update.isNotEmpty())
+    {
+        if (auto* dialog = dynamic_cast<UpdateDialog*> (editor->findChildWithID ("updateDialog")))
+        {
+            updates::Release r;
+            r.version = "1.2.0";
+            r.notes = "Updates now install from inside PromptMIDI: no browser, no installer to run. The update prompt appears in the middle of the window.";
+            r.download = "https://example.com/PromptMIDI-Windows-Setup.exe";
+            r.sha256 = juce::String::repeatedString ("a", 64);
+            dialog->offer (r, true, "Installs right here, keeping the parts and folders you chose. It downloads now and installs when you close Ableton Live; Windows asks for permission once.");
+
+            Updater::State s;
+            s.version = "1.2.0";
+
+            if (update == "download")
+            {
+                s.stage = Updater::Stage::Downloading;
+                s.downloaded = 14 * 1024 * 1024;
+                s.total = 36 * 1024 * 1024;
+                dialog->follow (s);
+            }
+            else if (update == "ready")
+            {
+                s.stage = Updater::Stage::WaitingForHost;
+                s.message = "PromptMIDI 1.2.0 is ready. It installs as soon as you close Ableton Live, and is there the next time you open it.";
+                dialog->follow (s);
+            }
+            else if (update == "failed")
+            {
+                s.stage = Updater::Stage::Failed;
+                s.message = "Couldn't download the update (no connection). Check your internet connection and try again.";
+                dialog->follow (s);
+            }
+
+            dialog->setVisible (true);
+        }
+    }
+
     if (juce::SystemStats::getEnvironmentVariable ("PROMPTMIDI_SNAPSHOT_SETTINGS", {}).isNotEmpty())
     {
         // The Settings panel on its own.

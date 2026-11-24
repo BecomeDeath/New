@@ -103,6 +103,20 @@ void Settings::setThinkingDepth (int depth)
     }
 }
 
+juce::String Settings::getPendingUpdate() const
+{
+    return props() == nullptr ? juce::String() : props()->getValue ("pendingUpdate");
+}
+
+void Settings::setPendingUpdate (const juce::String& version)
+{
+    if (auto* p = props())
+    {
+        p->setValue ("pendingUpdate", version);
+        p->saveIfNeeded();
+    }
+}
+
 bool Settings::getCheckForUpdates() const
 {
     return props() == nullptr || props()->getBoolValue ("checkForUpdates", true);

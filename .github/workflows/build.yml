@@ -137,6 +137,21 @@ jobs:
           Uninstall "C:\PromptMIDI test\App"
           Expect "C:\PromptMIDI test\VST3\PromptMIDI.vst3" $false
 
+          Write-Host "== Updating from inside PromptMIDI keeps the parts and folders"
+          Run $setup '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=install-3.log /COMPONENTS="vst3,readme" /VST3DIR="C:\PromptMIDI test\VST3" /DIR="C:\PromptMIDI test\App"'
+          $binary = "C:\PromptMIDI test\VST3\PromptMIDI.vst3\Contents\x86_64-win\PromptMIDI.vst3"
+          Remove-Item -LiteralPath $binary
+          Expect $binary $false
+          & "$PWD\build\promptmidi_updater_test_artefacts\Release\promptmidi_updater_test.exe" install $setup $binary
+          if ($LASTEXITCODE -ne 0) { throw "the in-app update failed" }
+          Expect $binary $true
+          Expect "$env:CommonProgramFiles\VST3\PromptMIDI.vst3" $false
+          Expect "C:\PromptMIDI test\App\PromptMIDI.exe" $false
+          Expect "C:\PromptMIDI test\App\ReadMe.txt" $true
+          & $hostTest "C:\PromptMIDI test\VST3\PromptMIDI.vst3"
+          if ($LASTEXITCODE -ne 0) { throw "the updated VST3 failed the host test" }
+          Uninstall "C:\PromptMIDI test\App"
+
       # Pictures of the wizard's pages, to check its look (not a test). The full screenshots are an
       # artifact; small copies of the wizard window go in the log (collapsed) as well.
       - name: Screenshots of the installer (Windows)
@@ -245,6 +260,17 @@ jobs:
           expect no /Applications/PromptMIDI.app
           expect no "$SUPPORT/ReadMe.txt"
           expect yes "$SUPPORT/Sounds/GeneralUser-GS.sf2"
+
+          echo "== Updating from inside PromptMIDI keeps the parts"
+          binary=/Library/Audio/Plug-Ins/VST3/PromptMIDI.vst3/Contents/MacOS/PromptMIDI
+          sudo rm -f "$binary"
+          expect no "$binary"
+          build/promptmidi_updater_test_artefacts/Release/promptmidi_updater_test install dist/PromptMIDI-macOS.pkg "$binary"
+          expect yes "$binary"
+          expect no /Library/Audio/Plug-Ins/Components/PromptMIDI.component
+          expect no /Applications/PromptMIDI.app
+          codesign --verify --deep --strict /Library/Audio/Plug-Ins/VST3/PromptMIDI.vst3
+          build/promptmidi_host_test_artefacts/Release/promptmidi_host_test /Library/Audio/Plug-Ins/VST3/PromptMIDI.vst3
           reset
 
       # --- Linux: tarball with install.sh --------------------------------------------------------
@@ -287,6 +313,19 @@ jobs:
           sudo /usr/local/share/PromptMIDI/uninstall.sh
           expect no /opt/promptmidi-test/vst3/PromptMIDI.vst3
           expect no /usr/local/share/PromptMIDI
+
+          echo "== Updating from inside PromptMIDI keeps the parts and folders"
+          "$T/PromptMIDI-Linux/install.sh" --yes --no-app --vst3-dir ~/promptmidi-test/vst3 < /dev/null
+          binary=~/promptmidi-test/vst3/PromptMIDI.vst3/Contents/x86_64-linux/PromptMIDI.so
+          rm "$binary"
+          build/promptmidi_updater_test_artefacts/Release/promptmidi_updater_test install dist/PromptMIDI-Linux.tar.gz "$binary"
+          expect yes "$binary"
+          expect no ~/.vst3/PromptMIDI.vst3
+          expect no ~/.local/bin/promptmidi
+          expect yes ~/.local/share/PromptMIDI/ReadMe.txt
+          build/promptmidi_host_test_artefacts/Release/promptmidi_host_test ~/promptmidi-test/vst3/PromptMIDI.vst3
+          ~/.local/share/PromptMIDI/uninstall.sh
+          expect no ~/promptmidi-test/vst3/PromptMIDI.vst3
 
       - uses: actions/upload-artifact@v4
         with:
@@ -338,6 +377,17 @@ jobs:
                   "linux": f"{base}/PromptMIDI-Linux.tar.gz",
               },
           }
+          # Checksums and sizes: PromptMIDI installs an update itself only if the download matches.
+          import hashlib
+          def digest(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+          files = {"windows": "dist/PromptMIDI-Windows-Setup.exe", "macos": "dist/PromptMIDI-macOS.pkg", "linux": "dist/PromptMIDI-Linux.tar.gz"}
+          manifest["sha256"] = {k: digest(v) for k, v in files.items()}
+          manifest["sizes"] = {k: os.path.getsize(v) for k, v in files.items()}
           json.dump(manifest, open("dist/latest.json", "w"), indent=2)
           print(json.dumps(manifest, indent=2))
           EOF

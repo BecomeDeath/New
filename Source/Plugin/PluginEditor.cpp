@@ -94,7 +94,7 @@ void DragAllArea::paint (juce::Graphics& g)
 UpdateBanner::UpdateBanner()
 {
     downloadButton.setColour (juce::TextButton::buttonColourId, Theme::accent);
-    downloadButton.setTooltip ("Opens the download in your browser. Run the installer to update; your settings and presets stay.");
+    downloadButton.setTooltip ("Update PromptMIDI from right here; your settings and presets stay.");
     downloadButton.onClick = [this] { if (onDownload) onDownload(); };
     skipButton.setFlat (true);
     skipButton.setTooltip ("Skip this version (you'll hear about the next one)");
@@ -125,7 +125,7 @@ void UpdateBanner::paint (juce::Graphics& g)
     text.removeFromLeft (14);
     g.setColour (Theme::text);
     g.setFont (Theme::font (13.0f, Theme::Weight::Medium));
-    g.drawFittedText ("An update is available: " + release.version, text, juce::Justification::centredLeft, 1, 0.9f);
+    g.drawFittedText ("PromptMIDI " + release.version + " is available", text, juce::Justification::centredLeft, 1, 0.9f);
 }
 
 void UpdateBanner::resized()
@@ -743,19 +743,80 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
     soundAttachment    = std::make_unique<ButtonAttachment> (processor.parameters, "previewSound", soundButton);
     volumeAttachment   = std::make_unique<SliderAttachment> (processor.parameters, "previewVolume", volumeSlider);
 
-    // An update notice in the header; the check runs once the window is on screen (timerCallback).
+    // Updates: a dialog in the middle of the window offers a new version once (Update now / Later);
+    // after Later, an "Update" button stays in the header. Updating happens inside PromptMIDI.
+    // The check runs once the window is on screen (timerCallback).
     addChildComponent (updateBanner);
-    updateBanner.onDownload = [this]
-    {
-        const auto& r = updateBanner.getRelease();
-        juce::URL (r.download.isNotEmpty() ? r.download : (r.page.isNotEmpty() ? r.page : juce::String (updates::downloadPage))).launchInDefaultBrowser();
-    };
+    updateBanner.onDownload = [this] { openUpdateDialog(); };
     updateBanner.onSkip = [this]
     {
         processor.settings->setSkippedVersion (updateBanner.getRelease().version);
         updateBanner.setVisible (false);
         repaint();
     };
+
+    updateDialog.setComponentID ("updateDialog");
+    addChildComponent (updateDialog);
+    updateDialog.onUpdateNow = [this]
+    {
+        const auto& r = updateBanner.getRelease();
+
+        if (r.canInstallInApp())
+        {
+            updater->start (r);
+            followUpdater();
+        }
+        else
+        {
+            // A release without a checksum (before 1.2): the download page, as before.
+            juce::URL (r.download.isNotEmpty() ? r.download : (r.page.isNotEmpty() ? r.page : juce::String (updates::downloadPage))).launchInDefaultBrowser();
+            updateDialog.setVisible (false);
+        }
+    };
+    updateDialog.onLater = [this] { updateDialog.setVisible (false); };
+    updateDialog.onSkip = [this]
+    {
+        processor.settings->setSkippedVersion (updateBanner.getRelease().version);
+        updateDialog.setVisible (false);
+        updateBanner.setVisible (false);
+        resized();
+        repaint();
+    };
+    updateDialog.onCancel = [this] { updater->cancel(); };
+    updateDialog.onRetry = [this] { updater->reset(); updater->start (updateBanner.getRelease()); followUpdater(); };
+    updateDialog.onWebsite = [this]
+    {
+        const auto& r = updateBanner.getRelease();
+        juce::URL (r.page.isNotEmpty() ? r.page : juce::String (updates::downloadPage)).launchInDefaultBrowser();
+    };
+    updateDialog.onClose = [this]
+    {
+        const bool installed = updater->getState().stage == Updater::Stage::Done || updater->getState().stage == Updater::Stage::WaitingForHost;
+        updater->reset();
+        updateDialog.setVisible (false);
+
+        if (installed)
+        {
+            updateBanner.setVisible (false);
+            resized();
+        }
+    };
+
+    // Updated since last time? Say so once.
+    if (const auto pending = processor.settings->getPendingUpdate(); pending.isNotEmpty()
+        && updates::compareVersions (updates::currentVersion(), pending) >= 0)
+    {
+        processor.settings->setPendingUpdate ({});
+
+        if (updates::compareVersions (updates::currentVersion(), pending) == 0)
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<PromptMidiEditor> (this), pending]
+            {
+                if (safe != nullptr)
+                    safe->setStatusText ("PromptMIDI was updated to " + pending + ". Hover over the quality line after Generate to see how it chose.",
+                                         Theme::ok);
+            });
+    }
+
     showKnownUpdate();
 
     processor.addChangeListener (this);
@@ -949,6 +1010,7 @@ void PromptMidiEditor::resized()
 
     arrangement.setBounds (r.withTrimmedBottom (14));
     thinkingPanel.setBounds (arrangement.getBounds());
+    updateDialog.setBounds (getLocalBounds());
 }
 
 void PromptMidiEditor::paintOverChildren (juce::Graphics& g)
@@ -1232,12 +1294,96 @@ void PromptMidiEditor::showKnownUpdate()
     const auto r = updates::parseManifest (processor.settings->getKnownRelease());
 
     if (r.isNewer() && r.version != processor.settings->getSkippedVersion())
+    {
         updateBanner.show (r);
+        offerUpdate (r);
+    }
     else
+    {
         updateBanner.setVisible (false);
+    }
 
     resized();
     repaint();
+}
+
+juce::String PromptMidiEditor::updateHint (bool inApp) const
+{
+    if (! inApp)
+        return "Opens the download page in your browser.";
+
+    const auto& c = updater->context;
+    const juce::String host = c.hostName.isEmpty() || c.hostName == "Unknown" ? juce::String ("your DAW") : c.hostName;
+    juce::String text = "Installs right here, keeping the parts and folders you chose. ";
+
+   #if JUCE_WINDOWS
+    text << (c.standalone ? "PromptMIDI restarts to finish; Windows asks for permission once."
+                          : "It downloads now and installs when you close " + host + "; Windows asks for permission once.");
+   #elif JUCE_MAC
+    text << (c.standalone ? "PromptMIDI restarts to finish; your Mac asks for your password once."
+                          : "Your Mac asks for your password once; reopen " + host + " to use it.");
+   #else
+    text << (c.standalone ? "PromptMIDI restarts to finish." : "Reopen " + host + " to use it.");
+   #endif
+
+    return text;
+}
+
+void PromptMidiEditor::offerUpdate (const updates::Release& r)
+{
+    // Asked once per version per session; after Later, the header's Update button brings it back.
+    static juce::StringArray offered;
+
+    if (offered.contains (r.version) || updater->getState().stage != Updater::Stage::Idle)
+        return;
+
+    offered.add (r.version);
+    openUpdateDialog();
+}
+
+void PromptMidiEditor::openUpdateDialog()
+{
+    const auto& r = updateBanner.getRelease();
+
+    if (updater->getState().stage == Updater::Stage::Idle)
+        updateDialog.offer (r, r.canInstallInApp(), updateHint (r.canInstallInApp()));
+
+    updateDialog.setVisible (true);
+    updateDialog.toFront (true);
+    updateDialog.grabKeyboardFocus();
+    followUpdater();
+}
+
+void PromptMidiEditor::followUpdater()
+{
+    const auto s = updater->getState();
+
+    if (s.stage == Updater::Stage::Idle)
+        return;
+
+    // Another PromptMIDI window may have started it: show it here too.
+    if (! updateDialog.isVisible())
+    {
+        updateDialog.setVisible (true);
+        updateDialog.toFront (false);
+    }
+
+    updateDialog.follow (s);
+
+    if ((s.stage == Updater::Stage::Done || s.stage == Updater::Stage::WaitingForHost) && s.version.isNotEmpty())
+        if (processor.settings->getPendingUpdate() != s.version)
+            processor.settings->setPendingUpdate (s.version);
+
+    // The standalone app quits so the update can finish; it restarts into the new version.
+    if (s.restartApp && ! quitRequested && juce::JUCEApplicationBase::isStandaloneApp())
+    {
+        quitRequested = true;
+        juce::Timer::callAfterDelay (900, []
+        {
+            if (auto* app = juce::JUCEApplicationBase::getInstance())
+                app->systemRequestedQuit();
+        });
+    }
 }
 
 void PromptMidiEditor::startUpdateCheck()
@@ -1259,15 +1405,7 @@ void PromptMidiEditor::startUpdateCheck()
         if (! r.isValid())
             return;   // offline, or no release yet: try again next time
 
-        auto* downloads = new juce::DynamicObject();
-        downloads->setProperty (juce::Identifier (updates::platformKey()), r.download);
-        auto* known = new juce::DynamicObject();
-        known->setProperty ("version", r.version);
-        known->setProperty ("notes", r.notes);
-        known->setProperty ("page", r.page);
-        known->setProperty ("downloads", juce::var (downloads));
-
-        processor.settings->setKnownRelease (juce::JSON::toString (juce::var (known), true));
+        processor.settings->setKnownRelease (r.json);
         processor.settings->setLastUpdateCheck (now);
         showKnownUpdate();
     });
@@ -1405,6 +1543,11 @@ void PromptMidiEditor::refreshFromProcessor()
 
 void PromptMidiEditor::timerCallback()
 {
+    if (updater->getState().stage != Updater::Stage::Idle)
+        followUpdater();
+    else if (updateDialog.isVisible() && ! updateBanner.isVisible())
+        updateDialog.setVisible (false);   // finished in another window
+
     // Thinking: the panel over the arrangement, with its timer.
     if (processor.isThinking())
     {

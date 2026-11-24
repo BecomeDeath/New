@@ -173,7 +173,12 @@ The installers carry everything PromptMIDI needs: the plug-ins and app link thei
 
 Then rescan plug-ins in your DAW. PromptMIDI shows up as an **instrument** (category *Instrument | Generator*). To uninstall: *Settings > Apps* on Windows, `~/.local/share/PromptMIDI/uninstall.sh` on Linux, and on macOS delete the files listed in the ReadMe.
 
-**Updates.** When a newer release exists, PromptMIDI shows *An update is available* at the top of its window, with a **Download** button for that system's installer (or **x** to skip that version). It checks at most twice a day by reading the release's public `latest.json`; nothing is sent. Turn it off under **Settings**.
+**Updates.** When a newer release exists, a dialog in the middle of the window shows what's new and asks **Update now** or **Later**. After **Later**, an **Update** button stays in the header. **Update now** updates PromptMIDI from inside the plug-in, like a game launcher: it downloads the new version with a progress bar, checks it against the SHA-256 published with the release, and installs it silently over the current one, keeping the parts and folders you chose. No browser, no installer wizard. The plug-in lives in a system folder, so the system asks once for permission: **Yes** on Windows, your password on macOS, polkit on Linux for an install for every user. A DAW keeps the plug-in it has loaded until it closes:
+- **macOS, Linux:** the files are replaced at once, and the new version loads next time.
+- **Windows:** files in use can't be replaced, so the update installs as soon as you close the DAW.
+- **The standalone app:** installs the update, quits, and restarts into the new version.
+
+PromptMIDI checks for updates at most twice a day by reading the release's public `latest.json`; nothing is sent. Turn the check off under **Settings**. Releases before 1.2 don't publish checksums, so updating from 1.0 or 1.1 to 1.2 opens the download page once; from 1.2 on, updates install in place.
 
 **Unsigned builds.** The installers aren't code-signed yet, so Windows SmartScreen says *Windows protected your PC* (click *More info > Run anyway*) and macOS says it can't check the package (open *System Settings > Privacy & Security* and click *Open Anyway*). See [Releases](#releases) for signing.
 
@@ -304,7 +309,8 @@ Source/Core/     Engine: plain C++17, no JUCE
   MidiFileWriter notes -> Standard MIDI File (markers, loop points, keyswitch / CC articulations)
 Source/Plugin/   JUCE plug-in: processor, editor, arrangement and note editor (Timeline), instrument picker,
                  presets and MIDI import (PresetIO), preview engine (SoundFont player and sketch synth),
-                 Claude client, JSON, update check (UpdateCheck), thinking on a worker thread and its panel
+                 Claude client, JSON, update check (UpdateCheck) and in-app updater (Updater, UpdateDialog),
+                 thinking on a worker thread and its panel
 Resources/Fonts/ the Inter typeface (SIL Open Font License)
 Resources/Icon/  the app icon
 Resources/SoundFont/ GeneralUser GS, the preview's instruments (its licence alongside)

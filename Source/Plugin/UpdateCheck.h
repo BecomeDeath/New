@@ -37,13 +37,19 @@ namespace updates
         juce::String notes;      // a line or two about what's new
         juce::String download;   // this platform's installer (https only)
         juce::String page;       // the download page (https only)
+        juce::String sha256;     // the installer's SHA-256 (64 hex digits), for installing it from inside PromptMIDI
+        juce::int64 size = 0;    // its size in bytes (0 = not published)
+        juce::String json;       // the manifest as read
 
         bool isValid() const     { return version.isNotEmpty(); }
         bool isNewer() const     { return isValid() && compareVersions (version, currentVersion()) > 0; }
+
+        /** Releases from 1.2 on publish a checksum, so PromptMIDI can download and install them itself. */
+        bool canInstallInApp() const  { return download.isNotEmpty() && sha256.length() == 64; }
     };
 
-    /** Reads latest.json: { "version", "notes", "page", "downloads": { "windows", "macos", "linux" } }.
-        Returns an invalid release for anything else. */
+    /** Reads latest.json: { "version", "notes", "page", "downloads": { "windows", "macos", "linux" },
+        "sha256": { ... }, "sizes": { ... } }. Returns an invalid release for anything else. */
     Release parseManifest (const juce::String& json, const juce::String& platform = platformKey());
 
     /** Downloads the manifest on a background thread and calls back on the message thread (with

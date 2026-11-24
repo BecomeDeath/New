@@ -62,9 +62,12 @@ seconds, longer for long orchestral cues).
 UPDATES
 -------
 
-When a new version is out, PromptMIDI says "An update is available" at the top of its
-window. Click Download to get the new installer, run it, and it replaces the old version
-(your settings and presets are kept). Click x to skip that version.
+When a new version is out, PromptMIDI asks in the middle of its window: Update now or
+Later. Update now downloads the new version, checks it, and installs it over the old one,
+keeping the parts and folders you chose (your settings and presets stay). The system
+asks once for permission. A DAW keeps the loaded plug-in until it closes: on macOS and
+Linux the new version is there the next time you open the DAW; on Windows it installs as
+soon as you close the DAW. The standalone app restarts into the new version.
 
 PromptMIDI checks at most twice a day by downloading a small public file from GitHub;
 nothing about you or your music is sent. Turn it off in Settings ("Tell me when an
