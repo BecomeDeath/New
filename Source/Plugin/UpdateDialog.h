@@ -23,7 +23,7 @@ public:
     /** Follows the updater while it works (call ~30 times a second). */
     void follow (const Updater::State&);
 
-    std::function<void()> onUpdateNow, onLater, onSkip, onCancel, onRetry, onWebsite, onClose;
+    std::function<void()> onUpdateNow, onLater, onSkip, onCancel, onRetry, onWebsite, onClose, onHide;
 
     void paint (juce::Graphics&) override;
     void resized() override;

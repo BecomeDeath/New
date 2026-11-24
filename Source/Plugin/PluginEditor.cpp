@@ -111,6 +111,16 @@ void UpdateBanner::show (const updates::Release& r)
     repaint();
 }
 
+void UpdateBanner::setProgress (const juce::String& text)
+{
+    if (text == progress)
+        return;
+
+    progress = text;
+    downloadButton.setButtonText (progress.isEmpty() ? "Update" : "Show");
+    repaint();
+}
+
 void UpdateBanner::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (0.5f);
@@ -125,7 +135,7 @@ void UpdateBanner::paint (juce::Graphics& g)
     text.removeFromLeft (14);
     g.setColour (Theme::text);
     g.setFont (Theme::font (13.0f, Theme::Weight::Medium));
-    g.drawFittedText ("PromptMIDI " + release.version + " is available", text, juce::Justification::centredLeft, 1, 0.9f);
+    g.drawFittedText (progress.isNotEmpty() ? progress : "PromptMIDI " + release.version + " is available", text, juce::Justification::centredLeft, 1, 0.9f);
 }
 
 void UpdateBanner::resized()
@@ -774,6 +784,11 @@ PromptMidiEditor::PromptMidiEditor (PromptMidiProcessor& p)
         }
     };
     updateDialog.onLater = [this] { updateDialog.setVisible (false); };
+    updateDialog.onHide = [this]
+    {
+        updateDialogHidden = true;
+        updateDialog.setVisible (false);
+    };
     updateDialog.onSkip = [this]
     {
         processor.settings->setSkippedVersion (updateBanner.getRelease().version);
@@ -1344,6 +1359,7 @@ void PromptMidiEditor::offerUpdate (const updates::Release& r)
 void PromptMidiEditor::openUpdateDialog()
 {
     const auto& r = updateBanner.getRelease();
+    updateDialogHidden = false;
 
     if (updater->getState().stage == Updater::Stage::Idle)
         updateDialog.offer (r, r.canInstallInApp(), updateHint (r.canInstallInApp()));
@@ -1359,10 +1375,26 @@ void PromptMidiEditor::followUpdater()
     const auto s = updater->getState();
 
     if (s.stage == Updater::Stage::Idle)
+    {
+        updateBanner.setProgress ({});
         return;
+    }
+
+    // Hidden while it works in the background: the header shows how far it is.
+    const bool working = updater->isBusy();
+
+    if (! working)
+        updateDialogHidden = false;
+
+    if (updateBanner.isVisible())
+        updateBanner.setProgress (working ? "Updating to " + s.version
+                                              + (s.stage == Updater::Stage::Downloading && s.total > 0
+                                                     ? ": " + juce::String (juce::roundToInt (100.0 * (double) s.downloaded / (double) s.total)) + "%"
+                                                     : juce::String ("..."))
+                                          : juce::String());
 
     // Another PromptMIDI window may have started it: show it here too.
-    if (! updateDialog.isVisible())
+    if (! updateDialog.isVisible() && ! updateDialogHidden)
     {
         updateDialog.setVisible (true);
         updateDialog.toFront (false);

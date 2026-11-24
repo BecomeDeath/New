@@ -39,8 +39,9 @@ UpdateDialog::UpdateDialog()
 
     tertiaryButton.onClick = [this]
     {
-        if (mode == Mode::Offer && onSkip)        onSkip();
-        else if (mode == Mode::Failed && onClose) onClose();
+        if (mode == Mode::Offer && onSkip)         onSkip();
+        else if (mode == Mode::Failed && onClose)  onClose();
+        else if (mode == Mode::Working && onHide)  onHide();
     };
 
     tertiaryButton.setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
@@ -94,6 +95,7 @@ void UpdateDialog::setMode (Mode m)
             break;
         case Mode::Working:
             secondaryButton.setButtonText ("Cancel");
+            tertiaryButton.setButtonText ("Hide");
             break;
         case Mode::Info:
             primaryButton.setLabel ("OK");
@@ -110,7 +112,7 @@ void UpdateDialog::setMode (Mode m)
     const bool downloading = m == Mode::Working && state.stage == Updater::Stage::Downloading;
     primaryButton.setVisible (m != Mode::Working && ! (m == Mode::Info && state.restartApp));
     secondaryButton.setVisible (m == Mode::Offer || m == Mode::Failed || downloading);
-    tertiaryButton.setVisible (m == Mode::Offer || m == Mode::Failed);
+    tertiaryButton.setVisible (m == Mode::Offer || m == Mode::Failed || downloading);
     resized();
 }
 
@@ -134,7 +136,7 @@ void UpdateDialog::resized()
         secondaryButton.setBounds (buttons.removeFromRight (mode == Mode::Failed ? 190 : 104));
 
     if (tertiaryButton.isVisible())
-        tertiaryButton.setBounds (buttons.removeFromLeft (mode == Mode::Failed ? 80 : 140));
+        tertiaryButton.setBounds (buttons.removeFromLeft (mode == Mode::Offer ? 140 : 80));
 }
 
 bool UpdateDialog::keyPressed (const juce::KeyPress& key)
@@ -228,7 +230,7 @@ void UpdateDialog::paint (juce::Graphics& g)
     if (mode == Mode::Working)
     {
         bodyText (state.stage == Updater::Stage::Installing ? state.message
-                                                            : juce::String ("Keep working: PromptMIDI downloads in the background."),
+                                                            : juce::String ("Hide this to keep working: it downloads in the background and comes back when it's ready."),
                   Theme::textMid, 14.0f, 2);
         r.removeFromTop (10);
 

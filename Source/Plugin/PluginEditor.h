@@ -31,6 +31,8 @@ public:
     UpdateBanner();
     void show (const updates::Release&);
     const updates::Release& getRelease() const  { return release; }
+    /** While updating in the background: "Updating to 1.2.0: 38%" (empty = the offer). */
+    void setProgress (const juce::String&);
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -38,7 +40,8 @@ public:
 
 private:
     updates::Release release;
-    juce::TextButton downloadButton { "Download" };
+    juce::String progress;
+    juce::TextButton downloadButton { "Update" };
     IconButton skipButton { "skip this version", Icons::Kind::Cross };
 };
 
@@ -203,6 +206,7 @@ private:
     UpdateDialog updateDialog;                      // "an update is available", in the middle; updating happens there
     juce::SharedResourcePointer<Updater> updater;   // one for every PromptMIDI window in this process
     bool quitRequested = false;
+    bool updateDialogHidden = false;               // hidden while it downloads; back when it needs you
     void offerUpdate (const updates::Release&);
     void openUpdateDialog();
     void followUpdater();
